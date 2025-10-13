@@ -28,6 +28,7 @@ final class ESN_Bounce_Watcher {
 
     // Cron / Nonce / Locks
     const CRON_HOOK         = 'esn_bw_cron_check';
+    const PARSE_HOOK        = 'esn_bw_parse_dsn_job';
     const NONCE_ACTION_FORM = 'esn_bw_manual_sync_form';
     const NONCE_ACTION_AJAX = 'esn_bw_manual_sync_ajax';
     const LOCK_TRANSIENT    = 'esn_bw_lock';
@@ -51,6 +52,7 @@ final class ESN_Bounce_Watcher {
 
         // Cron
         add_action(self::CRON_HOOK, [__CLASS__, 'run_check']);
+        add_action(self::PARSE_HOOK, [__CLASS__, 'handle_parse_dsn_job'], 10, 2); // args: uid, mailbox
 
         register_activation_hook(__FILE__, [__CLASS__, 'on_activate']);
         register_deactivation_hook(__FILE__, [__CLASS__, 'on_deactivate']);
@@ -339,6 +341,10 @@ JS;
             to_email VARCHAR(255) NULL,
             imap_date DATETIME NULL,
             unseen TINYINT(1) NOT NULL DEFAULT 1,
+            parsed TINYINT(1) NOT NULL DEFAULT 0,
+            dr_sender_email VARCHAR(255) NULL,
+            dr_final_recipient VARCHAR(255) NULL,
+            dr_arrival_date DATETIME NULL,
             source_host VARCHAR(255) NULL,
             source_user VARCHAR(255) NULL,
             hash CHAR(40) NOT NULL,
@@ -368,6 +374,10 @@ JS;
             'to_email'   => null,
             'imap_date'  => null,
             'unseen'     => 1,
+            'parsed'     => 0,
+            'dr_sender_email'    => null,
+            'dr_final_recipient' => null,
+            'dr_arrival_date'    => null,
             'source_host'=> null,
             'source_user'=> null,
         ]);
@@ -401,12 +411,16 @@ JS;
                 'to_email'   => $row['to_email'],
                 'imap_date'  => $row['imap_date'],
                 'unseen'     => (int)$row['unseen'],
+                'parsed'     => (int)$row['parsed'],
+                'dr_sender_email'    => $row['dr_sender_email'],
+                'dr_final_recipient' => $row['dr_final_recipient'],
+                'dr_arrival_date'    => $row['dr_arrival_date'],
                 'source_host'=> $row['source_host'],
                 'source_user'=> $row['source_user'],
                 'hash'       => $hash,
                 'created_at' => $now,
                 'updated_at' => $now,
-            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%s','%s','%s','%s']);
+            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%s','%s','%s','%s','%s','%s','%s','%s']);
 
             if ( $wpdb->last_error ) {
                 update_option( ESN_Bounce_Watcher::OPTION_LAST_ERROR, 'DB insert error: ' . esc_html($wpdb->last_error) );
@@ -493,6 +507,76 @@ JS;
             elseif ($force_tls === false) $flags .= '/notls';
         }
         return sprintf('{%s:%d%s}%s', $host, (int)$port, $flags, $mailbox);
+    }
+
+    /** Decode body volgens IMAP encoding */
+    private static function imap_decode_body($raw, $encoding) {
+        switch ((int)$encoding) {
+            case ENCBASE64:
+                return base64_decode($raw);
+            case ENCQUOTEDPRINTABLE:
+                return quoted_printable_decode($raw);
+            default:
+                return $raw;
+        }
+    }
+
+    /** Vind de eerste DSN-achtige tekstbijlage (text/plain of message/delivery-status) en retourneer [partNo, text] */
+    private static function imap_find_dsn_text($imap, $msgno, $structure = null, $prefix = '') {
+        if (!$structure) $structure = @imap_fetchstructure($imap, $msgno);
+        if (!$structure) return [null, null];
+
+        // Leaf?
+        if (empty($structure->parts)) {
+            $type = (int)$structure->type;       // 0=text, 2=message, etc.
+            $sub  = strtolower($structure->subtype ?? '');
+            $name = ''; $filename = '';
+            if (!empty($structure->parameters)) {
+                foreach ($structure->parameters as $p) {
+                    if (strtolower($p->attribute) === 'name') $name = $p->value;
+                }
+            }
+            if (!empty($structure->dparameters)) {
+                foreach ($structure->dparameters as $p) {
+                    if (strtolower($p->attribute) === 'filename') $filename = $p->value;
+                }
+            }
+            $has_ext = (bool)preg_match('/\.[a-z0-9]+$/i', ($filename ?: $name) );
+            $enc = (int)($structure->encoding ?? 0);
+
+            $is_text_plain = ($type === TYPETEXT && $sub === 'plain');
+            $is_dsn_msg    = ($type === TYPEMESSAGE && ($sub === 'DELIVERY-STATUS' || $sub === 'delivery-status'));
+
+            // We willen bij voorkeur de DSN / text/plain met geen of lege bestandsnaam/extensie
+            if ( ($is_dsn_msg || $is_text_plain) && !$has_ext ) {
+                $partNo = $prefix === '' ? '1' : rtrim($prefix, '.');
+                $raw = @imap_fetchbody($imap, $msgno, $partNo);
+                if ($raw !== false) {
+                    return [$partNo, self::imap_decode_body($raw, $enc)];
+                }
+            }
+            return [null, null];
+        }
+
+        // Multipart: loop children
+        foreach ($structure->parts as $i => $p) {
+            $pn = $prefix . ($i+1) . '.';
+            [$foundPart, $text] = self::imap_find_dsn_text($imap, $msgno, $p, $pn);
+            if ($foundPart) return [$foundPart, $text];
+        }
+        return [null, null];
+    }
+
+    /** Parse de DSN "delivery report" tekst naar assoc array */
+    private static function parse_delivery_report_text($txt) {
+        $out = [];
+        foreach (preg_split('/\R+/', (string)$txt) as $line) {
+            $line = trim($line);
+            if ($line === '' || strpos($line, ':') === false) continue;
+            [$k, $v] = array_map('trim', explode(':', $line, 2));
+            if ($k !== '') $out[$k] = $v;
+        }
+        return $out;
     }
 
     /** Core: IMAP check + upsert */
@@ -630,6 +714,33 @@ JS;
                             'source_user'=> $username,
                         ]);
                     }
+
+                    // Plan parse-jobs gespreid (bijv. elke 10 seconden één), max 50 per run
+                    $delay_step = 10; // seconden tussen jobs
+                    $max_jobs   = 50;
+                    $scheduled  = 0;
+
+                    foreach ((array)$overviews as $idx => $ov) {
+                        if ($scheduled >= $max_jobs) break;
+
+                        $msgno = isset($ov->msgno) ? (int)$ov->msgno : null;
+                        if (!$msgno) continue;
+
+                        $uid = (function_exists('imap_uid') && $msgno) ? @imap_uid($inbox, $msgno) : null;
+                        if (!$uid) continue;
+
+                        // Sla alleen jobs in voor nog on-geparste items (parsed=0)
+                        global $wpdb;
+                        $table = self::table_name();
+                        $exists = (int)$wpdb->get_var( $wpdb->prepare(
+                            "SELECT parsed FROM {$table} WHERE (uid=%d OR uid IS NULL) AND mailbox=%s ORDER BY id DESC LIMIT 1",
+                            $uid, $mailbox
+                        ));
+                        if ($exists === 1) continue;
+
+                        wp_schedule_single_event( time() + ($scheduled+1)*$delay_step, self::PARSE_HOOK, [ $uid, $mailbox ] );
+                        $scheduled++;
+                    }
                 }
             }
 
@@ -651,6 +762,91 @@ JS;
 
         delete_transient(self::LOCK_TRANSIENT);
         return true;
+    }
+
+    public static function handle_parse_dsn_job($uid, $mailbox) {
+        // Open IMAP met huidige WPMS settings
+        $status = self::wpms_status();
+        if (!$status['has_plugin'] || !$status['is_smtp']) return;
+
+        $smtp = $status['opts']['smtp'] ?? [];
+        $host     = $smtp['host'] ?? '';
+        $enc_raw  = $smtp['encryption'] ?? '';
+        $auth     = array_key_exists('auth', $smtp) ? (bool)$smtp['auth'] : true;
+        $autotls  = array_key_exists('autotls', $smtp) ? (bool)$smtp['autotls'] : true;
+        $username = $smtp['user'] ?? '';
+        $password = self::get_wpms_password_plain();
+        $port     = self::get_effective_imap_port();
+
+        if (!function_exists('imap_open') || empty($host) || empty($port)) return;
+        $user_for_login = $auth ? $username : '';
+        $pass_for_login = $auth ? $password : '';
+
+        $mbox = null;
+        try {
+            $enc = strtolower($enc_raw);
+            if ($enc === 'ssl') {
+                $mbox = self::build_imap_mailbox_string($host, $port, 'ssl', $autotls, $mailbox);
+            } elseif ($enc === 'tls') {
+                $mbox = self::build_imap_mailbox_string($host, $port, 'tls', $autotls, $mailbox, $autotls ? true : false);
+            } else {
+                // none => probeer eerst tls indien autotls, anders notls
+                $mbox = self::build_imap_mailbox_string($host, $port, 'none', $autotls, $mailbox, $autotls ? true : false);
+            }
+            $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
+            if (!$imap && $enc === 'none' && $autotls) {
+                // fallback zonder TLS
+                $mbox = self::build_imap_mailbox_string($host, $port, 'none', false, $mailbox, false);
+                $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
+            }
+            if (!$imap) return;
+
+            // msgno opzoeken vanaf UID
+            $msgno = @imap_msgno($imap, (int)$uid);
+            if (!$msgno) { @imap_close($imap); return; }
+
+            // Vind TXT/DSN part
+            [, $txt] = self::imap_find_dsn_text($imap, $msgno);
+            if (!$txt) { @imap_close($imap); return; }
+
+            // Parse naar assoc
+            $data = self::parse_delivery_report_text($txt);
+
+            // Velden mappen
+            $sender  = '';
+            if (!empty($data['X-Postfix-Sender'])) {
+                // "rfc822; noreply@..."
+                $sender = trim( preg_replace('~^rfc822;\s*~i', '', $data['X-Postfix-Sender']) );
+            }
+            $final   = '';
+            if (!empty($data['Final-Recipient'])) {
+                $final = trim( preg_replace('~^rfc822;\s*~i', '', $data['Final-Recipient']) );
+            }
+            $arrival = !empty($data['Arrival-Date']) ? date('Y-m-d H:i:s', strtotime($data['Arrival-Date'])) : null;
+
+            // Wegschrijven
+            global $wpdb;
+            $table = self::table_name();
+            $wpdb->query( $wpdb->prepare(
+                "UPDATE {$table}
+                 SET dr_sender_email=%s, dr_final_recipient=%s, dr_arrival_date=%s,
+                     from_email=COALESCE(NULLIF(%s,''), from_email),
+                     to_email=COALESCE(NULLIF(%s,''), to_email),
+                     imap_date=COALESCE(%s, imap_date),
+                     parsed=1,
+                     updated_at=%s
+                 WHERE uid=%d AND mailbox=%s",
+                $sender, $final, $arrival,
+                $sender, $final, $arrival,
+                current_time('mysql'),
+                (int)$uid, $mailbox
+            ));
+
+            @imap_close($imap);
+        } catch (\Throwable $e) {
+            // Stil falen; desnoods loggen:
+            // update_option(self::OPTION_LAST_ERROR, 'Parse job error: '.esc_html($e->getMessage()));
+        }
     }
 
     /** Legacy POST fallback */
