@@ -44,6 +44,7 @@ final class ESN_Bounce_Watcher {
 
         // Fallback non-AJAX (verborgen formulier)
         add_action('admin_post_esn_bw_manual_sync', [__CLASS__, 'handle_manual_sync_post']);
+        add_action('admin_post_esn_bw_truncate', [__CLASS__, 'handle_truncate_bounces']);
         // AJAX endpoint
         add_action('wp_ajax_esn_bw_manual_sync', [__CLASS__, 'handle_manual_sync_ajax']);
 
@@ -368,7 +369,7 @@ JS;
     /** Helper: upsert in eigen tabel */
     private static function upsert_bounce($row) {
         global $wpdb;
-        $table = $wpdb->prefix . 'esn_bounces';
+        $table = self::table_name();
 
         $row = wp_parse_args($row, [
             'message_id' => null,
@@ -907,6 +908,21 @@ JS;
         }
     }
 
+    public static function handle_truncate_bounces() {
+        if (!current_user_can('manage_options')) wp_die('Geen toegang');
+        check_admin_referer('esn_bw_truncate');
+
+        global $wpdb;
+        $table = self::table_name();
+        $wpdb->query("TRUNCATE TABLE {$table}");
+
+        update_option(self::OPTION_COUNT, 0, false);
+        update_option(self::OPTION_LAST_ERROR, '', false);
+
+        wp_safe_redirect(add_query_arg(['page' => self::SLUG_SETTINGS, 'truncated' => '1'], admin_url('admin.php')));
+        exit;
+    }
+
     /** INSTELLINGEN-pagina (voorheen render_admin_page) */
     public static function render_settings_page() {
         if (!current_user_can('manage_options')) return;
@@ -983,6 +999,13 @@ JS;
         do_settings_sections(self::SLUG_SETTINGS);
         submit_button('Opslaan');
         echo '</form>';
+        echo '<hr style="margin:16px 0;">';
+        echo '<h2>Testhulpmiddel</h2>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        wp_nonce_field('esn_bw_truncate');
+        echo '<input type="hidden" name="action" value="esn_bw_truncate">';
+        submit_button('Bounces tabel legen', 'delete');
+        echo '</form>';
         echo '</div>';
 
         echo '</div>'; // flex
@@ -1011,12 +1034,12 @@ JS;
         $table->display();
         echo '</form>';
 
-        echo '</div>';
         global $wpdb;
-        $total = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . ESN_Bounce_Watcher::table_name() );
+        $total = (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . ESN_Bounce_Watcher::table_name());
         if ($total === 0) {
             echo '<p class="description">Nog geen bounces opgeslagen. Klik op <em>Instellingen → Handmatig synchroniseren</em> om te importeren.</p>';
         }
+        echo '</div>';
     }
 }
 
