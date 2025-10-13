@@ -315,6 +315,7 @@ JS;
         }
 
         self::create_tables();
+        self::backfill_from_dr_fields();
         $ensured = true;
     }
 
@@ -323,7 +324,7 @@ JS;
         if (!wp_next_scheduled(self::CRON_HOOK)) {
             wp_schedule_event(time() + 60, 'hourly', self::CRON_HOOK);
         }
-        self::create_tables();
+        self::ensure_tables();
     }
 
     public static function on_deactivate() {
@@ -359,11 +360,30 @@ JS;
             PRIMARY KEY (id),
             UNIQUE KEY uniq_hash (hash),
             KEY idx_unseen (unseen),
-            KEY idx_date (imap_date)
+            KEY idx_date (imap_date),
+            KEY idx_uid_mailbox (uid, mailbox),
+            KEY idx_parsed (parsed)
         ) $charset;";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql);
+    }
+
+    private static function backfill_from_dr_fields() {
+        global $wpdb;
+        $table = self::table_name();
+        // Alleen backfill waar parsed=1 en canonieke velden nog leeg zijn
+        $wpdb->query("
+            UPDATE {$table}
+            SET 
+                from_email = COALESCE(NULLIF(dr_sender_email, ''), from_email),
+                to_email   = COALESCE(NULLIF(dr_final_recipient, ''), to_email),
+                imap_date  = COALESCE(dr_arrival_date, imap_date)
+            WHERE parsed = 1
+              AND (from_email IS NULL OR from_email = '' 
+                   OR to_email IS NULL OR to_email = '' 
+                   OR imap_date IS NULL)
+        ");
     }
 
     /** Helper: upsert in eigen tabel */
@@ -703,8 +723,6 @@ JS;
                         $msgid = isset($ov->message_id) ? trim($ov->message_id, "<> \t\r\n") : null;
                         $uid   = (function_exists('imap_uid') && $msgno) ? @imap_uid($inbox, $msgno) : null;
 
-                        $from = isset($ov->from) ? $ov->from : null;
-                        $to   = isset($ov->to)   ? $ov->to   : null;
                         $date = isset($ov->date) ? date('Y-m-d H:i:s', strtotime($ov->date)) : null;
 
                         self::upsert_bounce([
@@ -712,8 +730,6 @@ JS;
                             'uid'        => $uid ?: null,
                             'mailbox'    => $mailbox,
                             'subject'    => isset($ov->subject) ? $ov->subject : null,
-                            'from_email' => $from,
-                            'to_email'   => $to,
                             'imap_date'  => $date,
                             'unseen'     => !empty($ov->seen) ? 0 : 1,
                             'source_host'=> $host,
@@ -743,6 +759,9 @@ JS;
                             $uid, $mailbox
                         ));
                         if ($exists === 1) continue;
+
+                        $ts = wp_next_scheduled(self::PARSE_HOOK, [ $uid, $mailbox ]);
+                        if ($ts) continue;
 
                         wp_schedule_single_event( time() + ($scheduled+1)*$delay_step, self::PARSE_HOOK, [ $uid, $mailbox ] );
                         $scheduled++;
@@ -828,20 +847,36 @@ JS;
             if (!empty($data['Final-Recipient'])) {
                 $final = trim( preg_replace('~^rfc822;\s*~i', '', $data['Final-Recipient']) );
             }
-            $arrival = !empty($data['Arrival-Date']) ? date('Y-m-d H:i:s', strtotime($data['Arrival-Date'])) : null;
+            $arr = $data['Arrival-Date'] ?? '';
+            if ($arr !== '') {
+                try {
+                    $dt = new DateTimeImmutable($arr);
+                    $tz = wp_timezone();
+                    $arrival = $dt->setTimezone($tz)->format('Y-m-d H:i:s');
+                } catch (\Throwable $e) {
+                    $arrival = null;
+                }
+            } else {
+                $arrival = null;
+            }
 
             // Wegschrijven
             global $wpdb;
             $table = self::table_name();
             $wpdb->query( $wpdb->prepare(
                 "UPDATE {$table}
-                 SET dr_sender_email=%s, dr_final_recipient=%s, dr_arrival_date=%s,
-                     from_email=COALESCE(NULLIF(%s,''), from_email),
-                     to_email=COALESCE(NULLIF(%s,''), to_email),
-                     imap_date=COALESCE(%s, imap_date),
-                     parsed=1,
-                     updated_at=%s
-                 WHERE uid=%d AND mailbox=%s",
+                 SET 
+                     -- audit/backup
+                     dr_sender_email = %s,
+                     dr_final_recipient = %s,
+                     dr_arrival_date = %s,
+                     -- canoniek
+                     from_email = %s,
+                     to_email   = %s,
+                     imap_date  = %s,
+                     parsed     = 1,
+                     updated_at = %s
+                 WHERE uid = %d AND mailbox = %s",
                 $sender, $final, $arrival,
                 $sender, $final, $arrival,
                 current_time('mysql'),
@@ -926,6 +961,10 @@ JS;
     /** INSTELLINGEN-pagina (voorheen render_admin_page) */
     public static function render_settings_page() {
         if (!current_user_can('manage_options')) return;
+
+        if (!empty($_GET['truncated'])) {
+            echo '<div class="notice notice-success is-dismissible"><p>Bounces tabel is geleegd.</p></div>';
+        }
 
         $count      = (int) get_option(self::OPTION_COUNT, 0);
         $last_run   = get_option(self::OPTION_LAST_RUN, '—');
