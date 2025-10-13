@@ -12,6 +12,7 @@ class ESN_BW_Admin {
         add_action('admin_post_esn_bw_manual_sync', [__CLASS__, 'handle_manual_sync_post']);
         add_action('admin_post_esn_bw_truncate', [__CLASS__, 'handle_truncate_bounces']);
         add_action('wp_ajax_esn_bw_manual_sync', [__CLASS__, 'handle_manual_sync_ajax']);
+        add_action('wp_ajax_esn_bw_debug_parse', [__CLASS__, 'handle_debug_parse_ajax']);
 
         add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_admin_assets']);
     }
@@ -291,6 +292,108 @@ class ESN_BW_Admin {
         wp_send_json_error(['message' => $msg] + $data, 500);
     }
 
+    public static function handle_debug_parse_ajax() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Geen toegang.'], 403);
+        }
+        check_ajax_referer(ESN_BW_Core::NONCE_ACTION_AJAX);
+
+        $status = ESN_BW_Imap::get_wpms_status();
+        if (!$status['has_plugin']) {
+            wp_send_json_error(['message' => 'WP Mail SMTP niet actief.'], 400);
+        }
+        if (!$status['is_smtp']) {
+            wp_send_json_error(['message' => 'WP Mail SMTP mailer is geen SMTP.'], 400);
+        }
+
+        $smtp = $status['opts']['smtp'] ?? [];
+        $host     = $smtp['host'] ?? '';
+        $enc_raw  = $smtp['encryption'] ?? '';
+        $auth     = array_key_exists('auth', $smtp) ? (bool) $smtp['auth'] : true;
+        $autotls  = array_key_exists('autotls', $smtp) ? (bool) $smtp['autotls'] : true;
+        $username = $smtp['user'] ?? '';
+        $password = ESN_BW_Imap::get_wpms_password_plain();
+        $port     = ESN_BW_Imap::get_effective_imap_port();
+
+        $locals   = get_option(ESN_BW_Core::OPTION_LOCAL_SETTINGS, []);
+        $mailbox  = $locals['mailbox'] ?? 'INBOX';
+        $subject  = $locals['subject'] ?? 'Undelivered Mail Returned to Sender';
+
+        if (!function_exists('imap_open')) {
+            wp_send_json_error(['message' => 'PHP imap-extensie ontbreekt.'], 500);
+        }
+        if (empty($host) || empty($port)) {
+            wp_send_json_error(['message' => 'Ontbrekende host/poort.'], 400);
+        }
+
+        $user_for_login = $auth ? $username : '';
+        $pass_for_login = $auth ? $password : '';
+
+        $imap = null;
+        try {
+            $enc = strtolower($enc_raw);
+            if ($enc === 'ssl') {
+                $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'ssl', $autotls, $mailbox);
+            } elseif ($enc === 'tls') {
+                $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'tls', $autotls, $mailbox, $autotls ? true : false);
+            } else {
+                $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'none', $autotls, $mailbox, $autotls ? true : false);
+            }
+            $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
+            if (!$imap && $enc === 'none' && $autotls) {
+                $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'none', false, $mailbox, false);
+                $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
+            }
+            if (!$imap) {
+                $err = imap_last_error() ?: 'IMAP open fout';
+                wp_send_json_error(['message' => $err], 500);
+            }
+
+            $crit = 'UNSEEN';
+            if (!empty($subject)) {
+                $crit .= ' SUBJECT "' . str_replace('"', '\"', $subject) . '"';
+            }
+            $mails = @imap_search($imap, $crit, 0, 'UTF-8');
+            if ($mails === false || empty($mails)) {
+                @imap_close($imap);
+                wp_send_json_error(['message' => 'Geen UNSEEN bounce gevonden voor debug.'], 404);
+            }
+
+            rsort($mails);
+            $msgno = (int) $mails[0];
+            $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
+
+            $structure = @imap_fetchstructure($imap, $msgno);
+            [$part, $txt] = ESN_BW_Parser::imap_find_dsn_text($imap, $msgno, $structure);
+
+            $raw = '';
+            if ($txt !== null) {
+                if (function_exists('mb_substr')) {
+                    $raw = mb_substr($txt, 0, 2000);
+                } else {
+                    $raw = substr($txt, 0, 2000);
+                }
+            }
+
+            $parsed = is_string($txt) ? ESN_BW_Parser::parse_delivery_report_text($txt) : [];
+
+            @imap_close($imap);
+
+            wp_send_json_success([
+                'uid'     => $uid,
+                'mailbox' => $mailbox,
+                'part'    => $part,
+                'raw'     => $raw,
+                'parsed'  => $parsed,
+            ]);
+        } catch (\Throwable $e) {
+            if (is_resource($imap)) {
+                @imap_close($imap);
+            }
+            wp_send_json_error(['message' => $e->getMessage()], 500);
+        }
+    }
+
     public static function handle_truncate_bounces() {
         if (!current_user_can('manage_options')) {
             wp_die('Geen toegang');
@@ -402,6 +505,46 @@ class ESN_BW_Admin {
         echo '<input type="hidden" name="action" value="esn_bw_truncate">';
         submit_button('Bounces tabel legen', 'delete');
         echo '</form>';
+        echo '<hr style="margin:16px 0;">';
+        echo '<h2>Debug: parse voorbeeld</h2>';
+        echo '<p class="description">Haalt 1 recente UNSEEN bounce op, toont DSN-TXT (eerste 2 kB) en het JSON-resultaat van de parser.</p>';
+        echo '<div id="esn-bw-debug-out" class="esn-bw-inline" style="white-space:pre-wrap;background:#f6f7f7;border:1px solid #ccd0d4;padding:10px;border-radius:6px;max-height:300px;overflow:auto;"></div>';
+        echo '<p><button id="esn-bw-debug-btn" type="button" class="button">Run debug parse</button></p>';
+
+        wp_add_inline_script('esn-bw-admin', <<<JS
+(function(){
+  const btn = document.getElementById('esn-bw-debug-btn');
+  const out = document.getElementById('esn-bw-debug-out');
+  if(!btn||!out||!window.ESNBW) return;
+  btn.addEventListener('click', function(){
+    btn.disabled = true;
+    out.textContent = 'Bezig…';
+    const body = new URLSearchParams();
+    body.set('action','esn_bw_debug_parse');
+    body.set('_ajax_nonce', window.ESNBW.nonce);
+    fetch(window.ESNBW.ajaxUrl, {
+      method:'POST',
+      credentials:'same-origin',
+      headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
+      body: body.toString()
+    }).then(r=>r.json()).then(j=>{
+      if(!j||!j.success){ out.textContent = '❌ ' + (j && j.data && j.data.message ? j.data.message : 'Onbekende fout'); return;}
+      const d = j.data;
+      let txt = '';
+      txt += 'UID: ' + (d.uid||'—') + '\n';
+      txt += 'Mailbox: ' + (d.mailbox||'—') + '\n';
+      txt += 'Gevonden part: ' + (d.part||'—') + '\n';
+      txt += '\n=== RAW DSN TEXT (eerste 2 kB) ===\n';
+      txt += (d.raw||'(leeg)') + '\n';
+      txt += '\n=== PARSED JSON ===\n';
+      txt += JSON.stringify(d.parsed||{}, null, 2);
+      out.textContent = txt;
+    }).catch(()=>{ out.textContent = '❌ Netwerkfout'; })
+      .finally(()=>{ btn.disabled=false; });
+  });
+})();
+JS
+, 'after');
         echo '</div>';
 
         echo '</div>';
