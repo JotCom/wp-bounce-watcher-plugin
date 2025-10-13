@@ -306,10 +306,15 @@ JS;
         return (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
     }
 
-    /** Run dbDelta als de tabel ontbreekt (handig bij updates zonder re-activatie) */
+    /** Zorg dat de tabel + schema up-to-date is (ook bij upgrades zonder re-activatie) */
     private static function ensure_tables() {
-        if ( self::table_exists() ) return;
+        static $ensured = false;
+        if ($ensured) {
+            return;
+        }
+
         self::create_tables();
+        $ensured = true;
     }
 
     /** CREATE TABLE on activate + cron schedule */
