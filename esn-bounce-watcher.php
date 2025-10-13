@@ -315,6 +315,7 @@ JS;
         }
 
         self::create_tables();
+        self::backfill_from_dr_fields();
         $ensured = true;
     }
 
@@ -323,7 +324,7 @@ JS;
         if (!wp_next_scheduled(self::CRON_HOOK)) {
             wp_schedule_event(time() + 60, 'hourly', self::CRON_HOOK);
         }
-        self::create_tables();
+        self::ensure_tables();
     }
 
     public static function on_deactivate() {
@@ -364,6 +365,23 @@ JS;
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql);
+    }
+
+    private static function backfill_from_dr_fields() {
+        global $wpdb;
+        $table = self::table_name();
+        // Alleen backfill waar parsed=1 en canonieke velden nog leeg zijn
+        $wpdb->query("
+            UPDATE {$table}
+            SET 
+                from_email = COALESCE(NULLIF(dr_sender_email, ''), from_email),
+                to_email   = COALESCE(NULLIF(dr_final_recipient, ''), to_email),
+                imap_date  = COALESCE(dr_arrival_date, imap_date)
+            WHERE parsed = 1
+              AND (from_email IS NULL OR from_email = '' 
+                   OR to_email IS NULL OR to_email = '' 
+                   OR imap_date IS NULL)
+        ");
     }
 
     /** Helper: upsert in eigen tabel */
@@ -703,8 +721,6 @@ JS;
                         $msgid = isset($ov->message_id) ? trim($ov->message_id, "<> \t\r\n") : null;
                         $uid   = (function_exists('imap_uid') && $msgno) ? @imap_uid($inbox, $msgno) : null;
 
-                        $from = isset($ov->from) ? $ov->from : null;
-                        $to   = isset($ov->to)   ? $ov->to   : null;
                         $date = isset($ov->date) ? date('Y-m-d H:i:s', strtotime($ov->date)) : null;
 
                         self::upsert_bounce([
@@ -712,8 +728,6 @@ JS;
                             'uid'        => $uid ?: null,
                             'mailbox'    => $mailbox,
                             'subject'    => isset($ov->subject) ? $ov->subject : null,
-                            'from_email' => $from,
-                            'to_email'   => $to,
                             'imap_date'  => $date,
                             'unseen'     => !empty($ov->seen) ? 0 : 1,
                             'source_host'=> $host,
@@ -835,13 +849,18 @@ JS;
             $table = self::table_name();
             $wpdb->query( $wpdb->prepare(
                 "UPDATE {$table}
-                 SET dr_sender_email=%s, dr_final_recipient=%s, dr_arrival_date=%s,
-                     from_email=COALESCE(NULLIF(%s,''), from_email),
-                     to_email=COALESCE(NULLIF(%s,''), to_email),
-                     imap_date=COALESCE(%s, imap_date),
-                     parsed=1,
-                     updated_at=%s
-                 WHERE uid=%d AND mailbox=%s",
+                 SET 
+                     -- audit/backup
+                     dr_sender_email = %s,
+                     dr_final_recipient = %s,
+                     dr_arrival_date = %s,
+                     -- canoniek
+                     from_email = %s,
+                     to_email   = %s,
+                     imap_date  = %s,
+                     parsed     = 1,
+                     updated_at = %s
+                 WHERE uid = %d AND mailbox = %s",
                 $sender, $final, $arrival,
                 $sender, $final, $arrival,
                 current_time('mysql'),
