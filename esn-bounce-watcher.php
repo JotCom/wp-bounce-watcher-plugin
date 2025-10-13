@@ -360,7 +360,9 @@ JS;
             PRIMARY KEY (id),
             UNIQUE KEY uniq_hash (hash),
             KEY idx_unseen (unseen),
-            KEY idx_date (imap_date)
+            KEY idx_date (imap_date),
+            KEY idx_uid_mailbox (uid, mailbox),
+            KEY idx_parsed (parsed)
         ) $charset;";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -758,6 +760,9 @@ JS;
                         ));
                         if ($exists === 1) continue;
 
+                        $ts = wp_next_scheduled(self::PARSE_HOOK, [ $uid, $mailbox ]);
+                        if ($ts) continue;
+
                         wp_schedule_single_event( time() + ($scheduled+1)*$delay_step, self::PARSE_HOOK, [ $uid, $mailbox ] );
                         $scheduled++;
                     }
@@ -842,7 +847,18 @@ JS;
             if (!empty($data['Final-Recipient'])) {
                 $final = trim( preg_replace('~^rfc822;\s*~i', '', $data['Final-Recipient']) );
             }
-            $arrival = !empty($data['Arrival-Date']) ? date('Y-m-d H:i:s', strtotime($data['Arrival-Date'])) : null;
+            $arr = $data['Arrival-Date'] ?? '';
+            if ($arr !== '') {
+                try {
+                    $dt = new DateTimeImmutable($arr);
+                    $tz = wp_timezone();
+                    $arrival = $dt->setTimezone($tz)->format('Y-m-d H:i:s');
+                } catch (\Throwable $e) {
+                    $arrival = null;
+                }
+            } else {
+                $arrival = null;
+            }
 
             // Wegschrijven
             global $wpdb;
@@ -945,6 +961,10 @@ JS;
     /** INSTELLINGEN-pagina (voorheen render_admin_page) */
     public static function render_settings_page() {
         if (!current_user_can('manage_options')) return;
+
+        if (!empty($_GET['truncated'])) {
+            echo '<div class="notice notice-success is-dismissible"><p>Bounces tabel is geleegd.</p></div>';
+        }
 
         $count      = (int) get_option(self::OPTION_COUNT, 0);
         $last_run   = get_option(self::OPTION_LAST_RUN, '—');
