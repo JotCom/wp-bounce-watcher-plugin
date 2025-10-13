@@ -117,11 +117,29 @@ class ESN_BW_Parser {
             return [null, null];
         }
 
+        [$dsn, $plain] = self::imap_find_dsn_candidates($imap, $msgno, $structure, $prefix);
+
+        if (!empty($dsn[0])) {
+            return $dsn;
+        }
+
+        if (!empty($plain[0])) {
+            return $plain;
+        }
+
+        return [null, null];
+    }
+
+    protected static function imap_find_dsn_candidates($imap, $msgno, $structure, $prefix = '') {
+        $foundDsn   = [null, null];
+        $foundPlain = [null, null];
+
         if (empty($structure->parts)) {
             $type = (int) $structure->type;
             $sub  = strtolower($structure->subtype ?? '');
             $name = '';
             $filename = '';
+
             if (!empty($structure->parameters)) {
                 foreach ($structure->parameters as $p) {
                     if (strtolower($p->attribute) === 'name') {
@@ -129,6 +147,7 @@ class ESN_BW_Parser {
                     }
                 }
             }
+
             if (!empty($structure->dparameters)) {
                 foreach ($structure->dparameters as $p) {
                     if (strtolower($p->attribute) === 'filename') {
@@ -136,30 +155,53 @@ class ESN_BW_Parser {
                     }
                 }
             }
+
             $has_ext = (bool) preg_match('/\\.[a-z0-9]+$/i', ($filename ?: $name));
-            $enc = (int) ($structure->encoding ?? 0);
+            $enc     = (int) ($structure->encoding ?? 0);
 
             $is_text_plain = ($type === TYPETEXT && $sub === 'plain');
-            $is_dsn_msg    = ($type === TYPEMESSAGE && ($sub === 'delivery-status' || $sub === 'DELIVERY-STATUS'));
+            $is_dsn_msg    = ($type === TYPEMESSAGE && $sub === 'delivery-status');
 
-            if (($is_dsn_msg || $is_text_plain) && !$has_ext) {
+            if (!$has_ext) {
                 $partNo = $prefix === '' ? '1' : rtrim($prefix, '.');
-                $raw = @imap_fetchbody($imap, $msgno, $partNo);
-                if ($raw !== false) {
-                    return [$partNo, self::imap_decode_body($raw, $enc)];
+
+                if ($is_dsn_msg) {
+                    $raw = @imap_fetchbody($imap, $msgno, $partNo);
+                    if ($raw !== false) {
+                        $foundDsn = [$partNo, self::imap_decode_body($raw, $enc)];
+                        return [$foundDsn, $foundPlain];
+                    }
+                }
+
+                if ($is_text_plain) {
+                    $raw = @imap_fetchbody($imap, $msgno, $partNo);
+                    if ($raw !== false) {
+                        $foundPlain = [$partNo, self::imap_decode_body($raw, $enc)];
+                    }
                 }
             }
-            return [null, null];
+
+            return [$foundDsn, $foundPlain];
         }
 
-        foreach ($structure->parts as $i => $p) {
+        foreach ($structure->parts as $i => $part) {
             $pn = $prefix . ($i + 1) . '.';
-            [$foundPart, $text] = self::imap_find_dsn_text($imap, $msgno, $p, $pn);
-            if ($foundPart) {
-                return [$foundPart, $text];
+            [$childDsn, $childPlain] = self::imap_find_dsn_candidates($imap, $msgno, $part, $pn);
+
+            if (!$foundDsn[0] && !empty($childDsn[0])) {
+                $foundDsn = $childDsn;
+            }
+
+            if (!$foundPlain[0] && !empty($childPlain[0])) {
+                $foundPlain = $childPlain;
+            }
+
+            if ($foundDsn[0]) {
+                break;
             }
         }
-        return [null, null];
+
+        return [$foundDsn, $foundPlain];
     }
 
     public static function imap_decode_body($raw, $encoding) {
