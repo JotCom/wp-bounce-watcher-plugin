@@ -136,6 +136,14 @@ class ESN_BW_Parser {
 
             @imap_close($imap);
         } catch (\Throwable $e) {
+            } catch (\Throwable $e) {
+                esn_bw_dbg('parse_job: exception', [
+                    'msg'  => $e->getMessage(),
+                    'file' => basename($e->getFile()),
+                    'line' => $e->getLine(),
+                    'trace'=> substr($e->getTraceAsString(), 0, 500),
+                ]);
+            }
         }
     }
 
