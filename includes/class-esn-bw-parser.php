@@ -124,8 +124,11 @@ class ESN_BW_Parser {
                 (int) $uid,
                 $mailbox
             ));
-
+            //Log
+            esn_bw_dbg('parse_job: done', ['uid' => $uid, 'mailbox' => $mailbox]);
+            
             @imap_close($imap);
+            
         } catch (\Throwable $e) {
             esn_bw_dbg('exception', [
             'msg'  => $e->getMessage(),
