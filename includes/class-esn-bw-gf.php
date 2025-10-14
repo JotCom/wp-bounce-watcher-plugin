@@ -1,6 +1,6 @@
 <?php
 if (!defined('ABSPATH')) {
-    exit;
+  exit;
 }
 
 class ESN_BW_GF {
@@ -31,12 +31,12 @@ class ESN_BW_GF {
     $end   = $arrival_utc ? gmdate('Y-m-d H:i:s', strtotime($arrival_utc . ' +'.$win.' minutes')) : null;
 
     $search = [
-      'status'         => 'active',
-      'field_filters'  => [
+      'status'        => 'active',
+      'field_filters' => [
         'mode' => 'all',
         [
-          'key'   => (string)$cfg['email_field_id'],
-          'value' => $email_norm,
+          'key'      => (string)$cfg['email_field_id'],
+          'value'    => $email_norm,
           'operator' => 'is', // exacte match
         ],
       ],
