@@ -148,7 +148,7 @@ class ESN_BW_Admin {
         wp_add_inline_style('esn-bw-admin', $css);
 
         if ($current_page === ESN_BW_Core::SLUG_SETTINGS) {
-            wp_register_script('esn-bw-admin', false);
+            wp_register_script('esn-bw-admin', false, [], false, true); // in_footer = true
             wp_enqueue_script('esn-bw-admin');
             $data = [
                 'ajaxUrl' => admin_url('admin-ajax.php'),
@@ -512,37 +512,39 @@ class ESN_BW_Admin {
         echo '<p><button id="esn-bw-debug-btn" type="button" class="button">Run debug parse</button></p>';
 
         wp_add_inline_script('esn-bw-admin', <<<JS
-(function(){
-  const btn = document.getElementById('esn-bw-debug-btn');
-  const out = document.getElementById('esn-bw-debug-out');
-  if(!btn||!out||!window.ESNBW) return;
-  btn.addEventListener('click', function(){
-    btn.disabled = true;
-    out.textContent = 'Bezig…';
-    const body = new URLSearchParams();
-    body.set('action','esn_bw_debug_parse');
-    body.set('_ajax_nonce', window.ESNBW.nonce);
-    fetch(window.ESNBW.ajaxUrl, {
-      method:'POST',
-      credentials:'same-origin',
-      headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
-      body: body.toString()
-    }).then(r=>r.json()).then(j=>{
-      if(!j||!j.success){ out.textContent = '❌ ' + (j && j.data && j.data.message ? j.data.message : 'Onbekende fout'); return;}
-      const d = j.data;
-      let txt = '';
-      txt += 'UID: ' + (d.uid||'—') + '\n';
-      txt += 'Mailbox: ' + (d.mailbox||'—') + '\n';
-      txt += 'Gevonden part: ' + (d.part||'—') + '\n';
-      txt += '\n=== RAW DSN TEXT (eerste 2 kB) ===\n';
-      txt += (d.raw||'(leeg)') + '\n';
-      txt += '\n=== PARSED JSON ===\n';
-      txt += JSON.stringify(d.parsed||{}, null, 2);
-      out.textContent = txt;
-    }).catch(()=>{ out.textContent = '❌ Netwerkfout'; })
-      .finally(()=>{ btn.disabled=false; });
-  });
-})();
+document.addEventListener('DOMContentLoaded', function(){
+  (function(){
+    const btn = document.getElementById('esn-bw-debug-btn');
+    const out = document.getElementById('esn-bw-debug-out');
+    if(!btn||!out||!window.ESNBW) return;
+    btn.addEventListener('click', function(){
+        btn.disabled = true;
+        out.textContent = 'Bezig…';
+        const body = new URLSearchParams();
+        body.set('action','esn_bw_debug_parse');
+        body.set('_ajax_nonce', window.ESNBW.nonce);
+        fetch(window.ESNBW.ajaxUrl, {
+        method:'POST',
+        credentials:'same-origin',
+        headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
+        body: body.toString()
+        }).then(r=>r.json()).then(j=>{
+        if(!j||!j.success){ out.textContent = '❌ ' + (j && j.data && j.data.message ? j.data.message : 'Onbekende fout'); return;}
+        const d = j.data;
+        let txt = '';
+        txt += 'UID: ' + (d.uid||'—') + '\n';
+        txt += 'Mailbox: ' + (d.mailbox||'—') + '\n';
+        txt += 'Gevonden part: ' + (d.part||'—') + '\n';
+        txt += '\n=== RAW DSN TEXT (eerste 2 kB) ===\n';
+        txt += (d.raw||'(leeg)') + '\n';
+        txt += '\n=== PARSED JSON ===\n';
+        txt += JSON.stringify(d.parsed||{}, null, 2);
+        out.textContent = txt;
+        }).catch(()=>{ out.textContent = '❌ Netwerkfout'; })
+        .finally(()=>{ btn.disabled=false; });
+    });
+  })();
+});
 JS
 , 'after');
         echo '</div>';
