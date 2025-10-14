@@ -363,16 +363,12 @@ class ESN_BW_Admin {
             $msgno = (int) $mails[0];
             $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
 
-            $structure = @imap_fetchstructure($imap, $msgno);
-            [$part, $txt] = ESN_BW_Parser::imap_find_dsn_text($imap, $msgno, $structure);
+            $rawMessage = ESN_BW_Parser::imap_get_raw_message($imap, $msgno);
+            [$part, $txt] = ESN_BW_Parser::find_dsn_with_mailparse($rawMessage);
 
             $raw = '';
             if ($txt !== null) {
-                if (function_exists('mb_substr')) {
-                    $raw = mb_substr($txt, 0, 2000);
-                } else {
-                    $raw = substr($txt, 0, 2000);
-                }
+                $raw = function_exists('mb_substr') ? mb_substr($txt, 0, 2000) : substr($txt, 0, 2000);
             }
 
             $parsed = is_string($txt) ? ESN_BW_Parser::parse_delivery_report_text($txt) : [];

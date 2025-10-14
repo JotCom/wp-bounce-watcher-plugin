@@ -50,13 +50,15 @@ class ESN_BW_Parser {
                 return;
             }
 
-            [, $txt] = self::imap_find_dsn_text($imap, $msgno);
-            if (!$txt) {
+            $raw = self::imap_get_raw_message($imap, $msgno);
+            [, $dsnText] = self::find_dsn_with_mailparse($raw);
+            if (!$dsnText) {
+                update_option(ESN_BW_Core::OPTION_LAST_ERROR, 'Parse: geen message/delivery-status gevonden (uid ' . $uid . ', mailbox ' . $mailbox . ')');
                 @imap_close($imap);
                 return;
             }
 
-            $parsed = self::parse_delivery_report_text($txt);
+            $parsed = self::parse_delivery_report_text($dsnText);
 
             $data  = $parsed['flat'] ?? [];
             $first = $parsed['per_recipient'][0] ?? null;
@@ -114,101 +116,135 @@ class ESN_BW_Parser {
         }
     }
 
-    public static function imap_find_dsn_text($imap, $msgno, $structure = null, $prefix = '') {
-        if (!$structure) {
-            $structure = @imap_fetchstructure($imap, $msgno);
+    /** Haal de volledige raw RFC822 message op (headers + body, non-destructief) */
+    public static function imap_get_raw_message($imap, $msgno) {
+        $headers = @imap_fetchheader($imap, $msgno, FT_PREFETCHTEXT | FT_PEEK);
+        $body    = @imap_body($imap, $msgno, FT_PEEK);
+        if (!is_string($headers)) {
+            $headers = '';
         }
-        if (!$structure) {
+        if (!is_string($body)) {
+            $body = '';
+        }
+        return $headers . "\r\n" . $body;
+    }
+
+    /** Geef gedeodeerde body terug voor een mailparse part */
+    private static function mailparse_get_part_body(string $raw, array $pd) {
+        $start = $pd['starting-pos-body'] ?? null;
+        $end   = $pd['ending-pos-body'] ?? null;
+        if ($start === null || $end === null || $end <= $start) {
+            return '';
+        }
+
+        $slice = substr($raw, (int) $start, (int) ($end - $start));
+        $enc = strtolower($pd['transfer-encoding'] ?? '');
+        if ($enc === 'base64') {
+            $slice = base64_decode($slice) ?: '';
+        } elseif ($enc === 'quoted-printable') {
+            $slice = quoted_printable_decode($slice);
+        }
+
+        $charset = '';
+        if (!empty($pd['content-type-parameters']['charset'])) {
+            $charset = strtolower($pd['content-type-parameters']['charset']);
+        }
+        if ($charset && $charset !== 'utf-8') {
+            $conv = @iconv($charset, 'UTF-8//IGNORE', $slice);
+            if ($conv !== false) {
+                $slice = $conv;
+            }
+        }
+
+        return $slice;
+    }
+
+    /** Vind de machine-readable DSN (message/delivery-status). Valt zonodig terug op text/plain met naam 'Delivery report'. */
+    public static function find_dsn_with_mailparse(string $raw) {
+        if (!function_exists('mailparse_msg_create')) {
             return [null, null];
         }
 
-        if (empty($structure->parts)) {
-            $type = (int) $structure->type;
-            $sub  = strtolower($structure->subtype ?? '');
-            $enc  = (int) ($structure->encoding ?? 0);
+        $msg = mailparse_msg_create();
+        mailparse_msg_parse($msg, $raw);
+        $struct = mailparse_msg_get_structure($msg);
+        $foundPartId = null;
+        $foundData   = null;
 
-            $is_dsn_msg = ($type === TYPEMESSAGE && $sub === 'delivery-status');
+        foreach ($struct as $partId) {
+            $part = mailparse_msg_get_part($msg, $partId);
+            $pd   = mailparse_msg_get_part_data($part);
+            $ct   = strtolower($pd['content-type'] ?? '');
+            if ($ct === 'message/delivery-status') {
+                $foundPartId = $partId;
+                $foundData   = $pd;
+                break;
+            }
+        }
 
-            if ($is_dsn_msg) {
-                $partNo = $prefix === '' ? '1' : rtrim($prefix, '.');
-                $raw = @imap_fetchbody($imap, $msgno, $partNo);
-                if ($raw !== false) {
-                    return [$partNo, self::imap_decode_body($raw, $enc)];
+        if (!$foundPartId) {
+            foreach ($struct as $partId) {
+                $part = mailparse_msg_get_part($msg, $partId);
+                $pd   = mailparse_msg_get_part_data($part);
+                $ct   = strtolower($pd['content-type'] ?? '');
+                if ($ct === 'text/plain') {
+                    $name = '';
+                    if (!empty($pd['content-disposition-parameters']['filename'])) {
+                        $name = strtolower($pd['content-disposition-parameters']['filename']);
+                    } elseif (!empty($pd['content-type-parameters']['name'])) {
+                        $name = strtolower($pd['content-type-parameters']['name']);
+                    }
+                    if ($name === '' || strpos($name, 'delivery report') !== false) {
+                        $foundPartId = $partId;
+                        $foundData   = $pd;
+                        break;
+                    }
                 }
             }
+        }
+
+        if (!$foundPartId) {
+            mailparse_msg_free($msg);
             return [null, null];
         }
 
-        foreach ($structure->parts as $i => $p) {
-            $pn = $prefix . ($i + 1) . '.';
-            [$foundPart, $text] = self::imap_find_dsn_text($imap, $msgno, $p, $pn);
-            if ($foundPart) {
-                return [$foundPart, $text];
-            }
-        }
-        return [null, null];
+        $text = self::mailparse_get_part_body($raw, $foundData);
+        $text = str_replace(["\r\n", "\r"], "\n", (string) $text);
+
+        mailparse_msg_free($msg);
+
+        return [$foundPartId, $text];
     }
 
-    public static function imap_decode_body($raw, $encoding) {
-        switch ((int) $encoding) {
-            case ENCBASE64:
-                return base64_decode($raw);
-            case ENCQUOTEDPRINTABLE:
-                return quoted_printable_decode($raw);
-            case ENCBINARY:
-            case ENC8BIT:
-            case ENC7BIT:
-            default:
-                return $raw;
-        }
-    }
-
-    private static function dsn_unfold_lines(string $text): array {
-        $lines = preg_split("/\r\n|\n|\r/", $text);
-        $out = [];
+    private static function dsn_parse_block(string $block): array {
+        $lines = preg_split('/\n/', trim($block));
+        $unfolded = [];
         foreach ($lines as $line) {
-            if ($line !== '' && isset($out[count($out) - 1]) && isset($line[0]) && ($line[0] === ' ' || $line[0] === "\t")) {
-                $out[count($out) - 1] .= ' ' . ltrim($line);
-            } else {
-                $out[] = $line;
-            }
-        }
-        return $out;
-    }
-
-    private static function dsn_parse_header_block(array $lines): array {
-        $headers = [];
-        foreach ($lines as $l) {
-            if ($l === '' || strpos($l, ':') === false) {
+            if ($line === '') {
                 continue;
             }
-            [$k, $v] = explode(':', $l, 2);
-            $k = trim($k);
-            $v = trim($v);
-            $k = preg_replace_callback('/(^|-)[a-z]/', fn($m) => strtoupper($m[0]), strtolower($k));
-            $headers[$k] = $v;
-        }
-        return $headers;
-    }
-
-    private static function dsn_split_blocks(string $dsn): array {
-        $unfolded = self::dsn_unfold_lines($dsn);
-        $blocks = [];
-        $current = [];
-        foreach ($unfolded as $l) {
-            if ($l === '') {
-                if ($current) {
-                    $blocks[] = $current;
-                    $current = [];
-                }
+            if (!empty($unfolded) && isset($line[0]) && ($line[0] === ' ' || $line[0] === "\t")) {
+                $unfolded[count($unfolded) - 1] .= ' ' . trim($line);
             } else {
-                $current[] = $l;
+                $unfolded[] = $line;
             }
         }
-        if ($current) {
-            $blocks[] = $current;
+
+        $headers = [];
+        foreach ($unfolded as $line) {
+            $pos = strpos($line, ':');
+            if ($pos === false) {
+                continue;
+            }
+            $k = trim(substr($line, 0, $pos));
+            $v = trim(substr($line, $pos + 1));
+            if ($k !== '') {
+                $normalizedKey = preg_replace_callback('/(^|-)[a-z]/', fn($m) => strtoupper($m[0]), strtolower($k));
+                $headers[$normalizedKey] = $v;
+            }
         }
-        return array_map([self::class, 'dsn_parse_header_block'], $blocks);
+
+        return $headers;
     }
 
     private static function dsn_split_type_value(?string $raw): ?array {
@@ -226,7 +262,16 @@ class ESN_BW_Parser {
     }
 
     public static function parse_delivery_report_text($txt) {
-        $blocks = self::dsn_split_blocks((string) $txt);
+        $normalized = str_replace(["\r\n", "\r"], "\n", (string) $txt);
+        $rawBlocks = preg_split("/\n{2,}/", trim($normalized));
+        $blocks = [];
+        foreach ($rawBlocks as $block) {
+            $parsed = self::dsn_parse_block($block);
+            if (!empty($parsed)) {
+                $blocks[] = $parsed;
+            }
+        }
+
         $perMessage = $blocks[0] ?? [];
         $recBlocks = array_slice($blocks, 1);
 
