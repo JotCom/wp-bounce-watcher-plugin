@@ -19,16 +19,6 @@ class ESN_BW_Parser {
         $password = ESN_BW_Imap::get_wpms_password_plain();
         $port     = ESN_BW_Imap::get_effective_imap_port();
 
-        esn_bw_dbg('parse_job: settings', [
-            'host'    => $host,
-            'port'    => $port,
-            'enc'     => $enc_raw,
-            'autotls' => $autotls,
-            'auth'    => $auth,
-            'user'    => $username,
-            // GEEN password loggen
-        ]);
-
         if (!function_exists('imap_open') || empty($host) || empty($port)) {
             return;
         }
@@ -69,13 +59,6 @@ class ESN_BW_Parser {
             }
 
             $res = self::extract_dsn_from_imap($imap, $msgno);
-            //Log
-            esn_bw_dbg('parse_job: after extract_dsn_from_imap', [
-                'type' => gettype($res),
-                'keys' => is_array($res) ? array_keys($res) : null,
-                'raw_len' => is_array($res) && isset($res['raw']) ? strlen($res['raw']) : -1,
-                'parsed_type' => is_array($res) && isset($res['parsed']) ? gettype($res['parsed']) : 'none',
-            ]);
 
             if (empty($res['raw'])) {
                 update_option(ESN_BW_Core::OPTION_LAST_ERROR, 'Parse: geen message/delivery-status gevonden (uid ' . $uid . ', mailbox ' . $mailbox . ')');
@@ -156,62 +139,6 @@ class ESN_BW_Parser {
     public static function extract_dsn_from_imap($imap, int $msgno): array {
         // Haal raw RFC822 op
         $raw = self::imap_get_raw_message($imap, $msgno);
-        // Log
-        esn_bw_dbg('parse_job: raw lengths', [
-            'raw_len' => is_string($raw) ? strlen($raw) : -1,
-        ]);
-        // Log uitgebreider
-        if (function_exists('mailparse_msg_create') && is_string($raw) && strlen($raw) > 0) {
-            $m = mailparse_msg_create();
-            mailparse_msg_parse($m, $raw);
-            $parts = [];
-            foreach (mailparse_msg_get_structure($m) as $pid) {
-                $p  = mailparse_msg_get_part($m, $pid);
-                $pd = mailparse_msg_get_part_data($p);
-                $parts[] = [
-                    'id'   => $pid,
-                    'ct'   => $pd['content-type'] ?? '',
-                    'enc'  => $pd['transfer-encoding'] ?? '',
-                    'name' => $pd['content-disposition-parameters']['filename']
-                        ?? ($pd['content-type-parameters']['name'] ?? ''),
-                ];
-            }
-            esn_bw_dbg('parse_job: mime parts', ['parts' => $parts]);
-        } else {
-            esn_bw_dbg('parse_job: mailparse unavailable or empty raw', [
-                'mailparse' => function_exists('mailparse_msg_create'),
-            ]);
-        }
-        
-        $imapStruct = @imap_fetchstructure($imap, $msgno);
-        if ($imapStruct) {
-            // minimalistische flatten
-            $dump = [];
-            $stack = [ ['id' => '1', 'node' => $imapStruct] ];
-            while ($stack) {
-                $cur = array_pop($stack);
-                $node = $cur['node'];
-                $dump[] = [
-                    'id'   => $cur['id'],
-                    'type' => $node->type ?? null,
-                    'sub'  => $node->subtype ?? null,
-                    'enc'  => $node->encoding ?? null,
-                    'params' => $node->parameters ?? [],
-                    'dparams'=> $node->dparameters ?? [],
-                ];
-                if (!empty($node->parts)) {
-                    foreach ($node->parts as $i => $child) {
-                        $stack[] = ['id' => $cur['id'].'.'.($i+1), 'node' => $child];
-                    }
-                }
-            }
-            esn_bw_dbg('parse_job: imap structure', ['nodes' => $dump]);
-        }
-
-        $hdrStart = substr($raw, 0, 1500);
-        preg_match('~^Content-Type:[^\r\n]+~im', $hdrStart, $mCT);
-        esn_bw_dbg('parse_job: top-level Content-Type', ['ct_header' => $mCT[0] ?? '(none in first 1.5k)']);
-
         // Vind DSN via mailparse
         [$dsnPart, $dsnText] = self::find_dsn_with_mailparse($raw);
         // Log
