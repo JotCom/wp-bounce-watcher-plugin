@@ -62,9 +62,12 @@ class ESN_BW_GF {
       // huidige statuswaarde lezen
       $current = rgar($entry, (string)$cfg['status_field_id']);
       $current_norm = is_string($current) ? trim($current) : '';
-      if (strcasecmp($current_norm, (string)$cfg['status_verified']) === 0) {
-        // Niet overschrijven als Verified
-        continue;
+      // Niet overschrijven als al "Verified" of "Bounce"
+      if (
+          strcasecmp($current_norm, (string)$cfg['status_verified']) === 0 ||
+          strcasecmp($current_norm, (string)$cfg['status_bounce']) === 0
+      ) {
+          continue;
       }
 
       // Zet op Bounce
