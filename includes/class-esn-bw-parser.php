@@ -79,6 +79,15 @@ class ESN_BW_Parser {
             $data   = $parsed['flat'] ?? [];
             $first  = $parsed['per_recipient'][0] ?? null;
 
+            // extra inzicht in wat de parser oplevert
+            esn_bw_dbg('parse_job: parsed snapshot', [
+            'has_flat'   => !empty($data),
+            'has_first'  => (bool)$first,
+            'first_keys' => $first ? array_keys($first) : [],
+            'flat_keys'  => array_keys($data),
+            'raw_snip'   => substr($res['raw'] ?? '', 0, 200),
+            ]);
+
             $sender  = '';
             if (!empty($data['X-Postfix-Sender'])) {
                 $sender = trim(preg_replace('~^rfc822;\s*~i', '', $data['X-Postfix-Sender']));
@@ -101,6 +110,37 @@ class ESN_BW_Parser {
             } else {
                 $arrival = null;
             }
+
+            // --- FALLBACKS op raw DSN wanneer mapping leeg blijft ---
+            $raw_dsn = (string) ($res['raw'] ?? '');
+
+            // Final-Recipient (email)
+            if ($final === '' && $raw_dsn !== '' && preg_match('/Final-Recipient:\s*rfc822;\s*<?([^>\s;]+)>?/im', $raw_dsn, $m)) {
+                $final = strtolower(trim($m[1]));
+            }
+
+            // Sender (X-Postfix-Sender)
+            if ($sender === '' && $raw_dsn !== '' && preg_match('/X-Postfix-Sender:\s*rfc822;\s*<?([^>\s;]+)>?/im', $raw_dsn, $m)) {
+                $sender = strtolower(trim($m[1]));
+            }
+
+            // Arrival-Date
+            if ($arrival === null && $raw_dsn !== '' && preg_match('/Arrival-Date:\s*(.+)/im', $raw_dsn, $m)) {
+                $arr_str = trim($m[1]);
+                try {
+                    $dt = new DateTimeImmutable($arr_str);
+                    $arrival = $dt->setTimezone(wp_timezone())->format('Y-m-d H:i:s');
+                } catch (\Throwable $e) {
+                    // laat $arrival op null
+                }
+            }
+
+            // log na fallback, zodat je ziet wat we wegschrijven
+            esn_bw_dbg('parse_job: mapped fields (with fallbacks)', [
+            'sender'  => $sender,
+            'final'   => $final,
+            'arrival' => $arrival,
+            ]);
             
             // Gravity Forms matchen (optioneel, als ingeschakeld)
             $gf = get_option( ESN_BW_Core::OPTION_GF_SETTINGS, [] );
@@ -116,13 +156,6 @@ class ESN_BW_Parser {
                     ]
                 );
             }
-
-            //Log
-            esn_bw_dbg('mapped fields', [
-                'sender'  => $sender,
-                'final'   => $final,
-                'arrival' => $arrival,
-            ]);
 
             global $wpdb;
             $table = ESN_BW_DB::table_name();
