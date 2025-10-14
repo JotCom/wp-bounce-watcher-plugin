@@ -10,6 +10,15 @@ class ESN_BW_Parser {
             return;
         }
 
+        if (!function_exists('mailparse_msg_create')) {
+            update_option(
+                ESN_BW_Core::OPTION_LAST_ERROR,
+                'Parse: PHP mailparse-extensie ontbreekt. Activeer deze op de server.'
+            );
+            esn_bw_dbg('parse_job: mailparse missing', []);
+            return;
+        }
+
         $smtp = $status['opts']['smtp'] ?? [];
         $host     = $smtp['host'] ?? '';
         $enc_raw  = $smtp['encryption'] ?? '';
@@ -238,7 +247,7 @@ class ESN_BW_Parser {
     /** Vind de machine-readable DSN (message/delivery-status). Valt zonodig terug op text/plain met naam 'Delivery report'. */
     public static function find_dsn_with_mailparse(string $raw) {
         if (!function_exists('mailparse_msg_create')) {
-            return [null, null];
+            throw new \RuntimeException('PHP mailparse extension is required.');
         }
 
         $msg = mailparse_msg_create();
