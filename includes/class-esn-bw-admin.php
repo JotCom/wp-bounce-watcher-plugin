@@ -364,7 +364,7 @@ class ESN_BW_Admin {
             $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
 
             $structure = @imap_fetchstructure($imap, $msgno);
-            [$part, $txt] = ESN_BW_Parser::imap_find_dsn_text($imap, $msgno, $structure);
+            [$src, $part, $txt] = ESN_BW_Parser::imap_find_dsn_text($imap, $msgno, $structure);
 
             $raw = '';
             if ($txt !== null) {
@@ -383,6 +383,7 @@ class ESN_BW_Admin {
                 'uid'     => $uid,
                 'mailbox' => $mailbox,
                 'part'    => $part,
+                'source'  => $src, // 'mailparse' of 'imap'
                 'raw'     => $raw,
                 'parsed'  => $parsed,
             ]);
