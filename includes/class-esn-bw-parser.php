@@ -232,6 +232,9 @@ class ESN_BW_Parser {
 
         $recipients = [];
         foreach ($recBlocks as $b) {
+            if (!is_array($b)) {
+                continue;
+            }
             $fr = self::dsn_split_type_value($b['Final-Recipient'] ?? null);
             $or = self::dsn_split_type_value($b['Original-Recipient'] ?? null);
             $dc = self::dsn_split_type_value($b['Diagnostic-Code'] ?? null);
@@ -258,7 +261,7 @@ class ESN_BW_Parser {
         }
 
         $flat = $perMessage;
-        if (!empty($recBlocks[0])) {
+        if (!empty($recBlocks[0]) && is_array($recBlocks[0])) {
             foreach ($recBlocks[0] as $k => $v) {
                 $flat[$k] = $v;
             }
