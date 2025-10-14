@@ -74,15 +74,19 @@ class ESN_BW_GF {
         continue;
       }
 
-      // optioneel: audit meta opslaan
-      if (!empty($opts['uid'])) {
-        GFAPI::update_entry_meta($eid, 'esn_bw_bounce_uid', (int)$opts['uid']);
-      }
-      if (!empty($opts['recipient'])) {
-        GFAPI::update_entry_meta($eid, 'esn_bw_bounce_rcpt', (string)$opts['recipient']);
-      }
-      if (!empty($arrival_mysql)) {
-        GFAPI::update_entry_meta($eid, 'esn_bw_bounce_arrival', $arrival_mysql);
+      // ✅ Audit meta opslaan (met juiste GF helper)
+      if (function_exists('gform_update_meta')) {
+        if (!empty($opts['uid'])) {
+          gform_update_meta($eid, 'esn_bw_bounce_uid', (int)$opts['uid']);
+        }
+        if (!empty($opts['recipient'])) {
+          gform_update_meta($eid, 'esn_bw_bounce_rcpt', (string)$opts['recipient']);
+        }
+        if (!empty($arrival_mysql)) {
+          gform_update_meta($eid, 'esn_bw_bounce_arrival', $arrival_mysql);
+        }
+      } else {
+        esn_bw_dbg('gf: gform_update_meta missing');
       }
 
       $updated++;
