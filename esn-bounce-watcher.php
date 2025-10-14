@@ -10,7 +10,7 @@
 if (!defined('ABSPATH')) {
     exit;
 }
-
+/*
 // --- Whitelist: alleen deze IP's mogen de plugin activeren/initiëren ---
 if (!defined('ESN_BW_IP_WHITELIST')) {
     // VUL HIER JE (publieke) IP(S) IN
@@ -46,7 +46,7 @@ function esn_bw_bootstrap_allowed() : bool {
 
     $ip = esn_bw_client_ip();
     return $ip && in_array($ip, ESN_BW_IP_WHITELIST, true);
-}
+}*/
 
 
 if (!function_exists('is_plugin_active')) {
@@ -61,15 +61,15 @@ require_once __DIR__ . '/includes/class-esn-bw-admin.php';
 require_once __DIR__ . '/includes/class-esn-bw-core.php';
 require_once __DIR__ . '/includes/class-esn-bw-gf.php';
 
-if (esn_bw_bootstrap_allowed()) {
+//if (esn_bw_bootstrap_allowed()) {
     ESN_BW_Core::init(__FILE__);
-} else {
+/*} else {
     // Optioneel: minimale admin-notice voor ingelogde admins buiten whitelist
     add_action('admin_notices', function () {
         if (!current_user_can('manage_options')) return;
         echo '<div class="notice notice-info"><p><strong>ESN Bounce Watcher:</strong> safe mode actief (IP niet whitelisted). Plugin is ingeschakeld maar niet geïnitialiseerd om de live site te beschermen.</p></div>';
     });
-}
+}*/
 
 if (!function_exists('esn_bw_dbg')) {
     function esn_bw_dbg(string $msg, array $ctx = []): void {
