@@ -23,3 +23,22 @@ require_once __DIR__ . '/includes/class-esn-bw-admin.php';
 require_once __DIR__ . '/includes/class-esn-bw-core.php';
 
 ESN_BW_Core::init(__FILE__);
+
+if (!function_exists('esn_bw_dbg')) {
+    function esn_bw_dbg(string $msg, array $ctx = []): void {
+        if (!defined('WP_DEBUG') || !WP_DEBUG) return;
+        // gevoelige velden maskeren
+        foreach (['password','pass','secret','Authorization'] as $k) {
+            if (isset($ctx[$k]) && is_string($ctx[$k]) && $ctx[$k] !== '') {
+                $ctx[$k] = '[redacted]';
+            }
+        }
+        // lange strings afkappen
+        foreach ($ctx as $k => $v) {
+            if (is_string($v) && strlen($v) > 500) {
+                $ctx[$k] = substr($v, 0, 500) . '…(truncated)';
+            }
+        }
+        error_log('[ESN_BW] ' . $msg . ' ' . json_encode($ctx));
+    }
+}

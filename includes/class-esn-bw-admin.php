@@ -346,7 +346,7 @@ class ESN_BW_Admin {
             }
 
             //Log
-            self::dbg('debug: imap_open', [
+            esn_bw_dbg('debug: imap_open', [
                 'mbox'    => $mbox,
                 'success' => (bool)$imap,
                 'last_error' => function_exists('imap_last_error') ? imap_last_error() : null,
@@ -374,7 +374,7 @@ class ESN_BW_Admin {
             $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
             
             //Log
-            self::dbg('debug: chosen msg', ['msgno' => $msgno, 'uid' => $uid]);
+            esn_bw_dbg('debug: chosen msg', ['msgno' => $msgno, 'uid' => $uid]);
 
 /*
             $rawMessage = ESN_BW_Parser::imap_get_raw_message($imap, $msgno);
@@ -393,9 +393,9 @@ class ESN_BW_Admin {
             $parsed  = is_array($res['parsed'] ?? null) ? $res['parsed'] : [];
             
             //Log
-            self::dbg('debug: raw lengths', ['raw_len' => is_string($res) ? strlen($res) : -1]);
+            esn_bw_dbg('debug: raw lengths', ['raw_len' => is_string($res) ? strlen($res) : -1]);
 
-            self::dbg('debug: DSN locate', [
+            esn_bw_dbg('debug: DSN locate', [
                 'part'   => $part,
                 'dsn_len'=> is_string($raw) ? strlen($raw) : -1,
             ]);
@@ -420,7 +420,7 @@ class ESN_BW_Admin {
                         'name' => $pd['content-disposition-parameters']['filename'] ?? ($pd['content-type-parameters']['name'] ?? ''),
                     ];
                 }
-                self::dbg('debug: mime structure', ['parts' => $parts]);
+                esn_bw_dbg('debug: mime structure', ['parts' => $parts]);
             }
 
             wp_send_json_success([
@@ -637,22 +637,5 @@ JS
         }
 
         ESN_BW_Bounces_List_Table::render_page();
-    }
-    // [DBG] veilige logger
-    private static function dbg(string $msg, array $ctx = []): void {
-        if (!defined('WP_DEBUG') || !WP_DEBUG) return;
-        // mask mogelijk gevoelige velden
-        foreach (['password','pass','secret','Authorization'] as $k) {
-            if (isset($ctx[$k]) && is_string($ctx[$k]) && $ctx[$k] !== '') {
-                $ctx[$k] = '[redacted]';
-            }
-        }
-        // beperk hele grote waarden
-        foreach ($ctx as $k => $v) {
-            if (is_string($v) && strlen($v) > 500) {
-                $ctx[$k] = substr($v, 0, 500) . '…(truncated)';
-            }
-        }
-        error_log('[ESN_BW] ' . $msg . ' ' . json_encode($ctx));
     }
 }
