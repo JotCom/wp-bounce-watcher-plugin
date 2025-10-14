@@ -395,6 +395,24 @@ class ESN_BW_Admin {
             //Log
             esn_bw_dbg('debug: raw lengths', ['raw_len' => is_string($res) ? strlen($res) : -1]);
 
+            // (mailparse parts)
+            if (function_exists('mailparse_msg_create') && is_string($raw) && strlen($raw) > 0) {
+                $m = mailparse_msg_create(); mailparse_msg_parse($m, $raw);
+                $parts = [];
+                foreach (mailparse_msg_get_structure($m) as $pid) {
+                    $p  = mailparse_msg_get_part($m, $pid);
+                    $pd = mailparse_msg_get_part_data($p);
+                    $parts[] = [
+                        'id'   => $pid,
+                        'ct'   => $pd['content-type'] ?? '',
+                        'enc'  => $pd['transfer-encoding'] ?? '',
+                        'name' => $pd['content-disposition-parameters']['filename']
+                            ?? ($pd['content-type-parameters']['name'] ?? ''),
+                    ];
+                }
+                esn_bw_dbg('debug: mime parts', ['parts' => $parts]);
+            }
+
             esn_bw_dbg('debug: DSN locate', [
                 'part'   => $part,
                 'dsn_len'=> is_string($raw) ? strlen($raw) : -1,

@@ -146,13 +146,72 @@ class ESN_BW_Parser {
         esn_bw_dbg('parse_job: raw lengths', [
             'raw_len' => is_string($raw) ? strlen($raw) : -1,
         ]);
+        // Log uitgebreider
+        if (function_exists('mailparse_msg_create') && is_string($raw) && strlen($raw) > 0) {
+            $m = mailparse_msg_create();
+            mailparse_msg_parse($m, $raw);
+            $parts = [];
+            foreach (mailparse_msg_get_structure($m) as $pid) {
+                $p  = mailparse_msg_get_part($m, $pid);
+                $pd = mailparse_msg_get_part_data($p);
+                $parts[] = [
+                    'id'   => $pid,
+                    'ct'   => $pd['content-type'] ?? '',
+                    'enc'  => $pd['transfer-encoding'] ?? '',
+                    'name' => $pd['content-disposition-parameters']['filename']
+                        ?? ($pd['content-type-parameters']['name'] ?? ''),
+                ];
+            }
+            esn_bw_dbg('parse_job: mime parts', ['parts' => $parts]);
+        } else {
+            esn_bw_dbg('parse_job: mailparse unavailable or empty raw', [
+                'mailparse' => function_exists('mailparse_msg_create'),
+            ]);
+        }
+        
+        $imapStruct = @imap_fetchstructure($imap, $msgno);
+        if ($imapStruct) {
+            // minimalistische flatten
+            $dump = [];
+            $stack = [ ['id' => '1', 'node' => $imapStruct] ];
+            while ($stack) {
+                $cur = array_pop($stack);
+                $node = $cur['node'];
+                $dump[] = [
+                    'id'   => $cur['id'],
+                    'type' => $node->type ?? null,
+                    'sub'  => $node->subtype ?? null,
+                    'enc'  => $node->encoding ?? null,
+                    'params' => $node->parameters ?? [],
+                    'dparams'=> $node->dparameters ?? [],
+                ];
+                if (!empty($node->parts)) {
+                    foreach ($node->parts as $i => $child) {
+                        $stack[] = ['id' => $cur['id'].'.'.($i+1), 'node' => $child];
+                    }
+                }
+            }
+            esn_bw_dbg('parse_job: imap structure', ['nodes' => $dump]);
+        }
+
+        $hdrStart = substr($raw, 0, 1500);
+        preg_match('~^Content-Type:[^\r\n]+~im', $hdrStart, $mCT);
+        esn_bw_dbg('parse_job: top-level Content-Type', ['ct_header' => $mCT[0] ?? '(none in first 1.5k)']);
+
         // Vind DSN via mailparse
-        [$part, $dsnText] = self::find_dsn_with_mailparse($raw);
+        [$dsnPart, $dsnText] = self::find_dsn_with_mailparse($raw);
         // Log
         esn_bw_dbg('parse_job: DSN locate', [
-            'dsn_part' => $part,
+            'dsn_part' => $dsnPart,
             'dsn_len'  => is_string($dsnText) ? strlen($dsnText) : -1,
         ]);
+        if (!$dsnPart) {
+            // Een extra aanwijzing: zit er wel multipart/report op top-niveau?
+            esn_bw_dbg('parse_job: DSN not found hint', [
+                'has_multipart_report' => (strpos(strtolower($raw), 'multipart/report') !== false),
+                'has_delivery_status'  => (strpos(strtolower($raw), 'message/delivery-status') !== false),
+            ]);
+        }
         if (is_string($dsnText)) {
             esn_bw_dbg('parse_job: DSN head', [ 'dsn_head' => substr($dsnText, 0, 200) ]);
         }
@@ -167,7 +226,7 @@ class ESN_BW_Parser {
         ]);
 
         return [
-            'part'   => $part,              // bijv. '2.1'
+            'part'   => $dsnPart,              // bijv. '2.1'
             'raw'    => $dsnText ?? '',     // volledige DSN-tekst
             'parsed' => $parsed,            // ['flat'=>..., 'per_recipient'=>...]
         ];
