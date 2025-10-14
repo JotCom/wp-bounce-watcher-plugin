@@ -19,6 +19,16 @@ class ESN_BW_Parser {
         $password = ESN_BW_Imap::get_wpms_password_plain();
         $port     = ESN_BW_Imap::get_effective_imap_port();
 
+        self::dbg('parse_job: settings', [
+            'host'    => $host,
+            'port'    => $port,
+            'enc'     => $enc_raw,
+            'autotls' => $autotls,
+            'auth'    => $auth,
+            'user'    => $username,
+            // GEEN password loggen
+        ]);
+
         if (!function_exists('imap_open') || empty($host) || empty($port)) {
             return;
         }
@@ -39,12 +49,20 @@ class ESN_BW_Parser {
             if (!$imap && $enc === 'none' && $autotls) {
                 $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'none', false, $mailbox, false);
                 $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
+                self::dbg('parse_job: imap_open', [
+                    'mbox'    => $mbox,
+                    'success' => (bool) $imap,
+                    'last_error' => function_exists('imap_last_error') ? imap_last_error() : null,
+                ]);
             }
+
             if (!$imap) {
                 return;
             }
 
             $msgno = @imap_msgno($imap, (int) $uid);
+            self::dbg('parse_job: resolved msgno', ['uid' => (int)$uid, 'msgno' => (int)$msgno, 'mailbox' => $mailbox]);
+
             if (!$msgno) {
                 @imap_close($imap);
                 return;
@@ -84,6 +102,13 @@ class ESN_BW_Parser {
                 $arrival = null;
             }
 
+            //Log
+            self::dbg('parse_job: mapped fields', [
+                'sender'  => $sender,
+                'final'   => $final,
+                'arrival' => $arrival,
+            ]);
+
             global $wpdb;
             $table = ESN_BW_DB::table_name();
             $wpdb->query($wpdb->prepare(
@@ -117,12 +142,29 @@ class ESN_BW_Parser {
     public static function extract_dsn_from_imap($imap, int $msgno): array {
         // Haal raw RFC822 op
         $raw = self::imap_get_raw_message($imap, $msgno);
+        // Log
+        self::dbg('parse_job: raw lengths', [
+            'raw_len' => is_string($raw) ? strlen($raw) : -1,
+        ]);
         // Vind DSN via mailparse
         [$part, $dsnText] = self::find_dsn_with_mailparse($raw);
+        // Log
+        self::dbg('parse_job: DSN locate', [
+            'dsn_part' => $part,
+            'dsn_len'  => is_string($dsnText) ? strlen($dsnText) : -1,
+        ]);
+        if (is_string($dsnText)) {
+            self::dbg('parse_job: DSN head', [ 'dsn_head' => substr($dsnText, 0, 200) ]);
+        }
         // Parse naar assoc
-        
         // Let op: parse_delivery_report_text() moet 'flat' en 'per_recipient' teruggeven
         $parsed = is_string($dsnText) ? self::parse_delivery_report_text($dsnText) : ['flat'=>[], 'per_recipient'=>[]];
+
+        // Log
+        self::dbg('parse_job: parsed keys', [
+            'flat_keys' => isset($parsed['flat']) ? array_slice(array_keys($parsed['flat']), 0, 10) : [],
+            'recipients_count' => isset($parsed['per_recipient']) ? count($parsed['per_recipient']) : 0,
+        ]);
 
         return [
             'part'   => $part,              // bijv. '2.1'
@@ -342,5 +384,22 @@ class ESN_BW_Parser {
             'flat' => $flat,
             'json' => $json,
         ];
+    }
+    // [DBG] veilige logger
+    private static function dbg(string $msg, array $ctx = []): void {
+        if (!defined('WP_DEBUG') || !WP_DEBUG) return;
+        // mask mogelijk gevoelige velden
+        foreach (['password','pass','secret','Authorization'] as $k) {
+            if (isset($ctx[$k]) && is_string($ctx[$k]) && $ctx[$k] !== '') {
+                $ctx[$k] = '[redacted]';
+            }
+        }
+        // beperk hele grote waarden
+        foreach ($ctx as $k => $v) {
+            if (is_string($v) && strlen($v) > 500) {
+                $ctx[$k] = substr($v, 0, 500) . '…(truncated)';
+            }
+        }
+        error_log('[ESN_BW] ' . $msg . ' ' . json_encode($ctx));
     }
 }

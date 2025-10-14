@@ -344,6 +344,15 @@ class ESN_BW_Admin {
                 $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'none', false, $mailbox, false);
                 $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
             }
+
+            //Log
+            self::dbg('debug: imap_open', [
+                'mbox'    => $mbox,
+                'success' => (bool)$imap,
+                'last_error' => function_exists('imap_last_error') ? imap_last_error() : null,
+            ]);
+
+
             if (!$imap) {
                 $err = imap_last_error() ?: 'IMAP open fout';
                 wp_send_json_error(['message' => $err], 500);
@@ -354,6 +363,7 @@ class ESN_BW_Admin {
                 $crit .= ' SUBJECT "' . str_replace('"', '\"', $subject) . '"';
             }
             $mails = @imap_search($imap, $crit, 0, 'UTF-8');
+
             if ($mails === false || empty($mails)) {
                 @imap_close($imap);
                 wp_send_json_error(['message' => 'Geen UNSEEN bounce gevonden voor debug.'], 404);
@@ -362,6 +372,10 @@ class ESN_BW_Admin {
             rsort($mails);
             $msgno = (int) $mails[0];
             $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
+            
+            //Log
+            self::dbg('debug: chosen msg', ['msgno' => $msgno, 'uid' => $uid]);
+
 /*
             $rawMessage = ESN_BW_Parser::imap_get_raw_message($imap, $msgno);
             [$part, $txt] = ESN_BW_Parser::find_dsn_with_mailparse($rawMessage);
@@ -377,11 +391,37 @@ class ESN_BW_Admin {
             $part    = $res['part']   ?? null;
             $raw     = $res['raw']    ?? '';
             $parsed  = is_array($res['parsed'] ?? null) ? $res['parsed'] : [];
+            
+            //Log
+            self::dbg('debug: raw lengths', ['raw_len' => is_string($res) ? strlen($res) : -1]);
+
+            self::dbg('debug: DSN locate', [
+                'part'   => $part,
+                'dsn_len'=> is_string($raw) ? strlen($raw) : -1,
+            ]);
 
             // Toon max 2 kB in de debug UI
             $rawForUi = mb_substr((string) $raw, 0, 2000);
 
             @imap_close($imap);
+
+            //Log
+            if (function_exists('mailparse_msg_create') && is_string($raw) && $raw !== '') {
+                $m = mailparse_msg_create();
+                mailparse_msg_parse($m, $raw);
+                $parts = [];
+                foreach (mailparse_msg_get_structure($m) as $pid) {
+                    $p  = mailparse_msg_get_part($m, $pid);
+                    $pd = mailparse_msg_get_part_data($p);
+                    $parts[] = [
+                        'id'   => $pid,
+                        'ct'   => $pd['content-type'] ?? '',
+                        'enc'  => $pd['transfer-encoding'] ?? '',
+                        'name' => $pd['content-disposition-parameters']['filename'] ?? ($pd['content-type-parameters']['name'] ?? ''),
+                    ];
+                }
+                self::dbg('debug: mime structure', ['parts' => $parts]);
+            }
 
             wp_send_json_success([
                 'uid'     => $uid,
