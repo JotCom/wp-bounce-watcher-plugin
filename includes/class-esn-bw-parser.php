@@ -56,14 +56,19 @@ class ESN_BW_Parser {
                 return;
             }
 
-            $data = self::parse_delivery_report_text($txt);
+            $parsed = self::parse_delivery_report_text($txt);
+
+            $data  = $parsed['flat'] ?? [];
+            $first = $parsed['per_recipient'][0] ?? null;
 
             $sender  = '';
             if (!empty($data['X-Postfix-Sender'])) {
                 $sender = trim(preg_replace('~^rfc822;\s*~i', '', $data['X-Postfix-Sender']));
             }
             $final   = '';
-            if (!empty($data['Final-Recipient'])) {
+            if ($first && !empty($first['Final-Recipient']['address'])) {
+                $final = $first['Final-Recipient']['address'];
+            } elseif (!empty($data['Final-Recipient'])) {
                 $final = trim(preg_replace('~^rfc822;\s*~i', '', $data['Final-Recipient']));
             }
             $arr = $data['Arrival-Date'] ?? '';
@@ -120,29 +125,11 @@ class ESN_BW_Parser {
         if (empty($structure->parts)) {
             $type = (int) $structure->type;
             $sub  = strtolower($structure->subtype ?? '');
-            $name = '';
-            $filename = '';
-            if (!empty($structure->parameters)) {
-                foreach ($structure->parameters as $p) {
-                    if (strtolower($p->attribute) === 'name') {
-                        $name = $p->value;
-                    }
-                }
-            }
-            if (!empty($structure->dparameters)) {
-                foreach ($structure->dparameters as $p) {
-                    if (strtolower($p->attribute) === 'filename') {
-                        $filename = $p->value;
-                    }
-                }
-            }
-            $has_ext = (bool) preg_match('/\\.[a-z0-9]+$/i', ($filename ?: $name));
-            $enc = (int) ($structure->encoding ?? 0);
+            $enc  = (int) ($structure->encoding ?? 0);
 
-            $is_text_plain = ($type === TYPETEXT && $sub === 'plain');
-            $is_dsn_msg    = ($type === TYPEMESSAGE && ($sub === 'delivery-status' || $sub === 'DELIVERY-STATUS'));
+            $is_dsn_msg = ($type === TYPEMESSAGE && $sub === 'delivery-status');
 
-            if (($is_dsn_msg || $is_text_plain) && !$has_ext) {
+            if ($is_dsn_msg) {
                 $partNo = $prefix === '' ? '1' : rtrim($prefix, '.');
                 $raw = @imap_fetchbody($imap, $msgno, $partNo);
                 if ($raw !== false) {
@@ -168,23 +155,128 @@ class ESN_BW_Parser {
                 return base64_decode($raw);
             case ENCQUOTEDPRINTABLE:
                 return quoted_printable_decode($raw);
+            case ENCBINARY:
+            case ENC8BIT:
+            case ENC7BIT:
             default:
                 return $raw;
         }
     }
 
-    public static function parse_delivery_report_text($txt) {
+    private static function dsn_unfold_lines(string $text): array {
+        $lines = preg_split("/\r\n|\n|\r/", $text);
         $out = [];
-        foreach (preg_split('/\R+/', (string) $txt) as $line) {
-            $line = trim($line);
-            if ($line === '' || strpos($line, ':') === false) {
-                continue;
-            }
-            [$k, $v] = array_map('trim', explode(':', $line, 2));
-            if ($k !== '') {
-                $out[$k] = $v;
+        foreach ($lines as $line) {
+            if ($line !== '' && isset($out[count($out) - 1]) && isset($line[0]) && ($line[0] === ' ' || $line[0] === "\t")) {
+                $out[count($out) - 1] .= ' ' . ltrim($line);
+            } else {
+                $out[] = $line;
             }
         }
         return $out;
+    }
+
+    private static function dsn_parse_header_block(array $lines): array {
+        $headers = [];
+        foreach ($lines as $l) {
+            if ($l === '' || strpos($l, ':') === false) {
+                continue;
+            }
+            [$k, $v] = explode(':', $l, 2);
+            $k = trim($k);
+            $v = trim($v);
+            $k = preg_replace_callback('/(^|-)[a-z]/', fn($m) => strtoupper($m[0]), strtolower($k));
+            $headers[$k] = $v;
+        }
+        return $headers;
+    }
+
+    private static function dsn_split_blocks(string $dsn): array {
+        $unfolded = self::dsn_unfold_lines($dsn);
+        $blocks = [];
+        $current = [];
+        foreach ($unfolded as $l) {
+            if ($l === '') {
+                if ($current) {
+                    $blocks[] = $current;
+                    $current = [];
+                }
+            } else {
+                $current[] = $l;
+            }
+        }
+        if ($current) {
+            $blocks[] = $current;
+        }
+        return array_map([self::class, 'dsn_parse_header_block'], $blocks);
+    }
+
+    private static function dsn_split_type_value(?string $raw): ?array {
+        if (!$raw) {
+            return null;
+        }
+        $t = explode(';', $raw, 2);
+        $type = trim($t[0]);
+        $val = isset($t[1]) ? trim($t[1]) : null;
+        return [
+            'type' => $type !== '' ? $type : null,
+            'value' => $val,
+            'raw' => $raw,
+        ];
+    }
+
+    public static function parse_delivery_report_text($txt) {
+        $blocks = self::dsn_split_blocks((string) $txt);
+        $perMessage = $blocks[0] ?? [];
+        $recBlocks = array_slice($blocks, 1);
+
+        $recipients = [];
+        foreach ($recBlocks as $b) {
+            $fr = self::dsn_split_type_value($b['Final-Recipient'] ?? null);
+            $or = self::dsn_split_type_value($b['Original-Recipient'] ?? null);
+            $dc = self::dsn_split_type_value($b['Diagnostic-Code'] ?? null);
+
+            $recipients[] = [
+                'Final-Recipient' => [
+                    'type' => $fr['type'] ?? null,
+                    'address' => $fr['value'] ?? null,
+                    'raw' => $fr['raw'] ?? null,
+                ],
+                'Original-Recipient' => [
+                    'type' => $or['type'] ?? null,
+                    'address' => $or['value'] ?? null,
+                    'raw' => $or['raw'] ?? null,
+                ],
+                'Action' => $b['Action'] ?? null,
+                'Status' => $b['Status'] ?? null,
+                'Diagnostic-Code' => [
+                    'type' => $dc['type'] ?? null,
+                    'text' => $dc['value'] ?? null,
+                    'raw' => $dc['raw'] ?? null,
+                ],
+            ];
+        }
+
+        $flat = $perMessage;
+        if (!empty($recBlocks[0])) {
+            foreach ($recBlocks[0] as $k => $v) {
+                $flat[$k] = $v;
+            }
+        }
+
+        $json = json_encode([
+            'per_message' => $perMessage,
+            'per_recipient' => $recipients,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            $json = null;
+        }
+
+        return [
+            'per_message' => $perMessage,
+            'per_recipient' => $recipients,
+            'flat' => $flat,
+            'json' => $json,
+        ];
     }
 }
