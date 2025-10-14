@@ -386,7 +386,7 @@ class ESN_BW_Parser {
         ];
     }
     // [DBG] veilige logger
-    private static function dbg(string $msg, array $ctx = []): void {
+    public static function dbg(string $msg, array $ctx = []): void {
         if (!defined('WP_DEBUG') || !WP_DEBUG) return;
         // mask mogelijk gevoelige velden
         foreach (['password','pass','secret','Authorization'] as $k) {
