@@ -117,15 +117,16 @@ class ESN_BW_Parser {
     }
 
     /** Haal de volledige raw RFC822 message op (headers + body, non-destructief) */
-    public static function imap_get_raw_message($imap, $msgno) {
-        $headers = @imap_fetchheader($imap, $msgno, FT_PREFETCHTEXT | FT_PEEK);
+    private static function imap_get_raw_message($imap, $msgno) {
+        // Voor headers: GEEN FT_PEEK gebruiken (bestaat niet voor fetchheader)
+        // FT_PREFETCHTEXT is oké; of 0 voor default.
+        $headers = @imap_fetchheader($imap, $msgno, FT_PREFETCHTEXT);
+        // Voor body: FT_PEEK voorkomt dat de mail 'SEEN' wordt
         $body    = @imap_body($imap, $msgno, FT_PEEK);
-        if (!is_string($headers)) {
-            $headers = '';
-        }
-        if (!is_string($body)) {
-            $body = '';
-        }
+
+        if (!is_string($headers)) $headers = '';
+        if (!is_string($body))    $body = '';
+
         return $headers . "\r\n" . $body;
     }
 
