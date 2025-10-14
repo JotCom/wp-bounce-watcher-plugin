@@ -50,18 +50,16 @@ class ESN_BW_Parser {
                 return;
             }
 
-            $raw = self::imap_get_raw_message($imap, $msgno);
-            [, $dsnText] = self::find_dsn_with_mailparse($raw);
-            if (!$dsnText) {
+            $res = self::extract_dsn_from_imap($imap, $msgno);
+            if (empty($res['raw'])) {
                 update_option(ESN_BW_Core::OPTION_LAST_ERROR, 'Parse: geen message/delivery-status gevonden (uid ' . $uid . ', mailbox ' . $mailbox . ')');
                 @imap_close($imap);
                 return;
             }
 
-            $parsed = self::parse_delivery_report_text($dsnText);
-
-            $data  = $parsed['flat'] ?? [];
-            $first = $parsed['per_recipient'][0] ?? null;
+            $parsed = $res['parsed'];
+            $data   = $parsed['flat'] ?? [];
+            $first  = $parsed['per_recipient'][0] ?? null;
 
             $sender  = '';
             if (!empty($data['X-Postfix-Sender'])) {
@@ -114,6 +112,23 @@ class ESN_BW_Parser {
             @imap_close($imap);
         } catch (\Throwable $e) {
         }
+    }
+
+    public static function extract_dsn_from_imap($imap, int $msgno): array {
+        // Haal raw RFC822 op
+        $raw = self::imap_get_raw_message($imap, $msgno);
+        // Vind DSN via mailparse
+        [$part, $dsnText] = self::find_dsn_with_mailparse($raw);
+        // Parse naar assoc
+        
+        // Let op: parse_delivery_report_text() moet 'flat' en 'per_recipient' teruggeven
+        $parsed = is_string($dsnText) ? self::parse_delivery_report_text($dsnText) : ['flat'=>[], 'per_recipient'=>[]];
+
+        return [
+            'part'   => $part,              // bijv. '2.1'
+            'raw'    => $dsnText ?? '',     // volledige DSN-tekst
+            'parsed' => $parsed,            // ['flat'=>..., 'per_recipient'=>...]
+        ];
     }
 
     /** Haal de volledige raw RFC822 message op (headers + body, non-destructief) */

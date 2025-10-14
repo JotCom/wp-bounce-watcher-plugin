@@ -362,7 +362,7 @@ class ESN_BW_Admin {
             rsort($mails);
             $msgno = (int) $mails[0];
             $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
-
+/*
             $rawMessage = ESN_BW_Parser::imap_get_raw_message($imap, $msgno);
             [$part, $txt] = ESN_BW_Parser::find_dsn_with_mailparse($rawMessage);
 
@@ -372,6 +372,14 @@ class ESN_BW_Admin {
             }
 
             $parsed = is_string($txt) ? ESN_BW_Parser::parse_delivery_report_text($txt) : [];
+*/
+            $res = ESN_BW_Parser::extract_dsn_from_imap($imap, $msgno);
+            $part   = $res['part'];
+            $raw    = $res['raw'];
+            $parsed = $res['parsed'];
+
+            // Toon max 2 kB in de debug UI
+            $rawForUi = mb_substr((string) $raw, 0, 2000);
 
             @imap_close($imap);
 
@@ -379,7 +387,7 @@ class ESN_BW_Admin {
                 'uid'     => $uid,
                 'mailbox' => $mailbox,
                 'part'    => $part,
-                'raw'     => $raw,
+                'raw'     => $rawForUi,
                 'parsed'  => $parsed,
             ]);
         } catch (\Throwable $e) {
