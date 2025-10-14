@@ -118,6 +118,77 @@ class ESN_BW_Admin {
             });
             </script>';
         }, ESN_BW_Core::SLUG_SETTINGS, 'esn_bw_section_local');
+
+        //Register everything needed for GF connection
+        register_setting('esn_bw_local_group', ESN_BW_Core::OPTION_GF_SETTINGS, [
+            'type' => 'array',
+            'sanitize_callback' => function ($input) {
+                $enabled         = !empty($input['enabled']);
+                $form_id         = isset($input['form_id']) ? (int) $input['form_id'] : 8;
+                $email_field_id  = isset($input['email_field_id']) ? (int) $input['email_field_id'] : 2;
+                $status_field_id = isset($input['status_field_id']) ? (int) $input['status_field_id'] : 20;
+                $window_minutes  = isset($input['window_minutes']) ? max(1, (int) $input['window_minutes']) : 120;
+                $status_verified = sanitize_text_field($input['status_verified'] ?? 'Verified');
+                $status_bounce   = sanitize_text_field($input['status_bounce'] ?? 'Bounce');
+
+                return [
+                    'enabled'          => $enabled,
+                    'form_id'          => $form_id,
+                    'email_field_id'   => $email_field_id,
+                    'status_field_id'  => $status_field_id,
+                    'window_minutes'   => $window_minutes,
+                    'status_verified'  => $status_verified,
+                    'status_bounce'    => $status_bounce,
+                ];
+            },
+            'default' => [
+                'enabled'          => false,
+                'form_id'          => 8,
+                'email_field_id'   => 2,
+                'status_field_id'  => 20,
+                'window_minutes'   => 120,
+                'status_verified'  => 'Verified',
+                'status_bounce'    => 'Bounce',
+            ],
+        ]);
+
+        add_settings_section('esn_bw_section_gf', 'Gravity Forms integratie', function () {
+        echo '<p>Match bounces met GF-entries op e-mailadres en tijdvenster; zet Status-veld op <em>Bounce</em> tenzij al <em>Verified</em>.</p>';
+        }, self::SLUG_SETTINGS);
+
+        add_settings_field('esn_bw_gf_enabled', 'Ins schakelen', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        echo '<label><input type="checkbox" name="esn_bw_gf_settings[enabled]" value="1" '.(!empty($s['enabled'])?'checked':'').'> Activeren</label>';
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_form', 'Form ID', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[form_id]" value="%d">', (int)($s['form_id']??0));
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_email', 'Email Field ID', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[email_field_id]" value="%d">', (int)($s['email_field_id']??0));
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_status', 'Status Field ID', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[status_field_id]" value="%d">', (int)($s['status_field_id']??0));
+        echo '<p class="description">Het GF-veld waarin de tekst “Bounce”/“Verified” komt te staan.</p>';
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_window', 'Match venster (min.)', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[window_minutes]" value="%d">', (int)($s['window_minutes']??120));
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_values', 'Status waarden', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        $v  = esc_attr($s['status_verified'] ?? 'Verified');
+        $b  = esc_attr($s['status_bounce'] ?? 'Bounce');
+        echo 'Verified: <input type="text" name="esn_bw_gf_settings[status_verified]" value="'.$v.'" class="regular-text" style="max-width:160px;"> ';
+        echo 'Bounce: <input type="text" name="esn_bw_gf_settings[status_bounce]" value="'.$b.'" class="regular-text" style="max-width:160px;">';
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
     }
 
     public static function maybe_show_dependency_notice() {
@@ -344,6 +415,15 @@ class ESN_BW_Admin {
                 $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'none', false, $mailbox, false);
                 $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
             }
+
+            //Log
+            esn_bw_dbg('imap_open', [
+                'mbox'    => $mbox,
+                'success' => (bool)$imap,
+                'last_error' => function_exists('imap_last_error') ? imap_last_error() : null,
+            ]);
+
+
             if (!$imap) {
                 $err = imap_last_error() ?: 'IMAP open fout';
                 wp_send_json_error(['message' => $err], 500);
@@ -354,6 +434,7 @@ class ESN_BW_Admin {
                 $crit .= ' SUBJECT "' . str_replace('"', '\"', $subject) . '"';
             }
             $mails = @imap_search($imap, $crit, 0, 'UTF-8');
+
             if ($mails === false || empty($mails)) {
                 @imap_close($imap);
                 wp_send_json_error(['message' => 'Geen UNSEEN bounce gevonden voor debug.'], 404);
@@ -362,20 +443,17 @@ class ESN_BW_Admin {
             rsort($mails);
             $msgno = (int) $mails[0];
             $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
+            
+            //Log
+            esn_bw_dbg('chosen msg', ['msgno' => $msgno, 'uid' => $uid]);
 
-            $structure = @imap_fetchstructure($imap, $msgno);
-            [$part, $txt] = ESN_BW_Parser::imap_find_dsn_text($imap, $msgno, $structure);
+            $res = ESN_BW_Parser::extract_dsn_from_imap($imap, $msgno);
+            $part    = $res['part']   ?? null;
+            $raw     = $res['raw']    ?? '';
+            $parsed  = is_array($res['parsed'] ?? null) ? $res['parsed'] : [];
 
-            $raw = '';
-            if ($txt !== null) {
-                if (function_exists('mb_substr')) {
-                    $raw = mb_substr($txt, 0, 2000);
-                } else {
-                    $raw = substr($txt, 0, 2000);
-                }
-            }
-
-            $parsed = is_string($txt) ? ESN_BW_Parser::parse_delivery_report_text($txt) : [];
+            // Toon max 2 kB in de debug UI
+            $rawForUi = mb_substr((string) $raw, 0, 2000);
 
             @imap_close($imap);
 
@@ -383,7 +461,7 @@ class ESN_BW_Admin {
                 'uid'     => $uid,
                 'mailbox' => $mailbox,
                 'part'    => $part,
-                'raw'     => $raw,
+                'raw'     => $rawForUi !== '' ? $rawForUi : '(leeg)',
                 'parsed'  => $parsed,
             ]);
         } catch (\Throwable $e) {
