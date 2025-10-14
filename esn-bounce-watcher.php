@@ -21,6 +21,7 @@ require_once __DIR__ . '/includes/class-esn-bw-parser.php';
 require_once __DIR__ . '/includes/class-esn-bw-list-table.php';
 require_once __DIR__ . '/includes/class-esn-bw-admin.php';
 require_once __DIR__ . '/includes/class-esn-bw-core.php';
+require_once __DIR__ . '/includes/class-esn-bw-gf.php';
 
 ESN_BW_Core::init(__FILE__);
 

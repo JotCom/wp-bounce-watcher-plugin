@@ -94,13 +94,17 @@ class ESN_BW_Parser {
             }
             
             // Gravity Forms matchen (optioneel, als ingeschakeld)
-            $gf = get_option('esn_bw_gf_settings', []);
-            if (!empty($gf['enabled'])) {
+            $gf = get_option( ESN_BW_Core::OPTION_GF_SETTINGS, [] );
+
+            if ( ! empty( $gf['enabled'] ) && ! empty( $final ) && class_exists( 'ESN_BW_GF' ) ) {
                 ESN_BW_GF::maybe_mark_bounce(
-                    $final,           // ontvanger uit DSN
-                    $arrival,         // arrival in WP-tijdzone (jij zet 'm al zo)
+                    strtolower( trim( $final ) ), // ontvanger uit DSN (genormaliseerd)
+                    $arrival,                     // Y-m-d H:i:s in WP-tijdzone (jij slaat ‘m zo op)
                     $gf,
-                    [ 'uid' => (int)$uid, 'recipient' => $final ]
+                    [
+                        'uid'       => (int) $uid,
+                        'recipient' => $final,
+                    ]
                 );
             }
 

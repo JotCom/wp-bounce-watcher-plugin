@@ -120,28 +120,36 @@ class ESN_BW_Admin {
         }, ESN_BW_Core::SLUG_SETTINGS, 'esn_bw_section_local');
 
         //Register everything needed for GF connection
-        register_setting('esn_bw_local_group', 'esn_bw_gf_settings', [
-        'type' => 'array',
-        'sanitize_callback' => function ($in) {
-            return [
-            'enabled'          => !empty($in['enabled']),
-            'form_id'          => isset($in['form_id']) ? (int)$in['form_id'] : 0,
-            'email_field_id'   => isset($in['email_field_id']) ? (int)$in['email_field_id'] : 0,
-            'status_field_id'  => isset($in['status_field_id']) ? (int)$in['status_field_id'] : 0,
-            'window_minutes'   => isset($in['window_minutes']) ? max(1,(int)$in['window_minutes']) : 120,
-            'status_verified'  => isset($in['status_verified']) ? trim($in['status_verified']) : 'Verified',
-            'status_bounce'    => isset($in['status_bounce']) ? trim($in['status_bounce']) : 'Bounce',
-            ];
-        },
-        'default' => [
-            'enabled'          => false,
-            'form_id'          => 0,
-            'email_field_id'   => 0,
-            'status_field_id'  => 0,
-            'window_minutes'   => 120,
-            'status_verified'  => 'Verified',
-            'status_bounce'    => 'Bounce',
-        ],
+        register_setting('esn_bw_local_group', ESN_BW_Core::OPTION_GF_SETTINGS, [
+            'type' => 'array',
+            'sanitize_callback' => function ($input) {
+                $enabled         = !empty($input['enabled']);
+                $form_id         = isset($input['form_id']) ? (int) $input['form_id'] : 8;
+                $email_field_id  = isset($input['email_field_id']) ? (int) $input['email_field_id'] : 2;
+                $status_field_id = isset($input['status_field_id']) ? (int) $input['status_field_id'] : 20;
+                $window_minutes  = isset($input['window_minutes']) ? max(1, (int) $input['window_minutes']) : 120;
+                $status_verified = sanitize_text_field($input['status_verified'] ?? 'Verified');
+                $status_bounce   = sanitize_text_field($input['status_bounce'] ?? 'Bounce');
+
+                return [
+                    'enabled'          => $enabled,
+                    'form_id'          => $form_id,
+                    'email_field_id'   => $email_field_id,
+                    'status_field_id'  => $status_field_id,
+                    'window_minutes'   => $window_minutes,
+                    'status_verified'  => $status_verified,
+                    'status_bounce'    => $status_bounce,
+                ];
+            },
+            'default' => [
+                'enabled'          => false,
+                'form_id'          => 8,
+                'email_field_id'   => 2,
+                'status_field_id'  => 20,
+                'window_minutes'   => 120,
+                'status_verified'  => 'Verified',
+                'status_bounce'    => 'Bounce',
+            ],
         ]);
 
         add_settings_section('esn_bw_section_gf', 'Gravity Forms integratie', function () {

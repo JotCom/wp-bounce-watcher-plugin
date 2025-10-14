@@ -5,6 +5,7 @@ if (!defined('ABSPATH')) {
 
 class ESN_BW_Core {
     public const OPTION_LOCAL_SETTINGS = 'esn_bw_local_settings';
+    public const OPTION_GF_SETTINGS = 'esn_bw_gf_settings';
     public const OPTION_COUNT      = 'esn_bw_count';
     public const OPTION_LAST_RUN   = 'esn_bw_last_run';
     public const OPTION_LAST_ERROR = 'esn_bw_last_error';
