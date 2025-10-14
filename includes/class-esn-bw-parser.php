@@ -39,7 +39,7 @@ class ESN_BW_Parser {
             if (!$imap && $enc === 'none' && $autotls) {
                 $mbox = ESN_BW_Imap::build_imap_mailbox_string($host, $port, 'none', false, $mailbox, false);
                 $imap = @imap_open($mbox, $user_for_login, $pass_for_login, 0, 1);
-                esn_bw_dbg('parse_job: imap_open', [
+                esn_bw_dbg('imap_open', [
                     'mbox'    => $mbox,
                     'success' => (bool) $imap,
                     'last_error' => function_exists('imap_last_error') ? imap_last_error() : null,
@@ -51,7 +51,7 @@ class ESN_BW_Parser {
             }
 
             $msgno = @imap_msgno($imap, (int) $uid);
-            esn_bw_dbg('parse_job: resolved msgno', ['uid' => (int)$uid, 'msgno' => (int)$msgno, 'mailbox' => $mailbox]);
+            esn_bw_dbg('resolved msgno', ['uid' => (int)$uid, 'msgno' => (int)$msgno, 'mailbox' => $mailbox]);
 
             if (!$msgno) {
                 @imap_close($imap);
@@ -94,7 +94,7 @@ class ESN_BW_Parser {
             }
 
             //Log
-            esn_bw_dbg('parse_job: mapped fields', [
+            esn_bw_dbg('mapped fields', [
                 'sender'  => $sender,
                 'final'   => $final,
                 'arrival' => $arrival,
@@ -127,7 +127,7 @@ class ESN_BW_Parser {
 
             @imap_close($imap);
         } catch (\Throwable $e) {
-            esn_bw_dbg('parse_job: exception', [
+            esn_bw_dbg('exception', [
             'msg'  => $e->getMessage(),
             'file' => basename($e->getFile()),
             'line' => $e->getLine(),
@@ -142,26 +142,26 @@ class ESN_BW_Parser {
         // Vind DSN via mailparse
         [$dsnPart, $dsnText] = self::find_dsn_with_mailparse($raw);
         // Log
-        esn_bw_dbg('parse_job: DSN locate', [
+        esn_bw_dbg('DSN locate', [
             'dsn_part' => $dsnPart,
             'dsn_len'  => is_string($dsnText) ? strlen($dsnText) : -1,
         ]);
         if (!$dsnPart) {
             // Een extra aanwijzing: zit er wel multipart/report op top-niveau?
-            esn_bw_dbg('parse_job: DSN not found hint', [
+            esn_bw_dbg('DSN not found hint', [
                 'has_multipart_report' => (strpos(strtolower($raw), 'multipart/report') !== false),
                 'has_delivery_status'  => (strpos(strtolower($raw), 'message/delivery-status') !== false),
             ]);
         }
         if (is_string($dsnText)) {
-            esn_bw_dbg('parse_job: DSN head', [ 'dsn_head' => substr($dsnText, 0, 200) ]);
+            esn_bw_dbg('DSN head', [ 'dsn_head' => substr($dsnText, 0, 200) ]);
         }
         // Parse naar assoc
         // Let op: parse_delivery_report_text() moet 'flat' en 'per_recipient' teruggeven
         $parsed = is_string($dsnText) ? self::parse_delivery_report_text($dsnText) : ['flat'=>[], 'per_recipient'=>[]];
 
         // Log
-        esn_bw_dbg('parse_job: parsed keys', [
+        esn_bw_dbg('parsed keys', [
             'flat_keys' => isset($parsed['flat']) ? array_slice(array_keys($parsed['flat']), 0, 10) : [],
             'recipients_count' => isset($parsed['per_recipient']) ? count($parsed['per_recipient']) : 0,
         ]);

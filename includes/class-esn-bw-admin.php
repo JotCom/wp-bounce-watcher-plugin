@@ -346,7 +346,7 @@ class ESN_BW_Admin {
             }
 
             //Log
-            esn_bw_dbg('debug: imap_open', [
+            esn_bw_dbg('imap_open', [
                 'mbox'    => $mbox,
                 'success' => (bool)$imap,
                 'last_error' => function_exists('imap_last_error') ? imap_last_error() : null,
@@ -374,28 +374,12 @@ class ESN_BW_Admin {
             $uid   = function_exists('imap_uid') ? @imap_uid($imap, $msgno) : null;
             
             //Log
-            esn_bw_dbg('debug: chosen msg', ['msgno' => $msgno, 'uid' => $uid]);
+            esn_bw_dbg('chosen msg', ['msgno' => $msgno, 'uid' => $uid]);
 
-/*
-            $rawMessage = ESN_BW_Parser::imap_get_raw_message($imap, $msgno);
-            [$part, $txt] = ESN_BW_Parser::find_dsn_with_mailparse($rawMessage);
-
-            $raw = '';
-            if ($txt !== null) {
-                $raw = function_exists('mb_substr') ? mb_substr($txt, 0, 2000) : substr($txt, 0, 2000);
-            }
-
-            $parsed = is_string($txt) ? ESN_BW_Parser::parse_delivery_report_text($txt) : [];
-*/
             $res = ESN_BW_Parser::extract_dsn_from_imap($imap, $msgno);
             $part    = $res['part']   ?? null;
             $raw     = $res['raw']    ?? '';
             $parsed  = is_array($res['parsed'] ?? null) ? $res['parsed'] : [];
-
-            esn_bw_dbg('debug: DSN locate', [
-                'part'   => $part,
-                'dsn_len'=> is_string($raw) ? strlen($raw) : -1,
-            ]);
 
             // Toon max 2 kB in de debug UI
             $rawForUi = mb_substr((string) $raw, 0, 2000);
