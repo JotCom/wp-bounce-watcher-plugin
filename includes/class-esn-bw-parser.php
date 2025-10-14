@@ -69,6 +69,14 @@ class ESN_BW_Parser {
             }
 
             $res = self::extract_dsn_from_imap($imap, $msgno);
+            //Log
+            esn_bw_dbg('parse_job: after extract_dsn_from_imap', [
+                'type' => gettype($res),
+                'keys' => is_array($res) ? array_keys($res) : null,
+                'raw_len' => is_array($res) && isset($res['raw']) ? strlen($res['raw']) : -1,
+                'parsed_type' => is_array($res) && isset($res['parsed']) ? gettype($res['parsed']) : 'none',
+            ]);
+
             if (empty($res['raw'])) {
                 update_option(ESN_BW_Core::OPTION_LAST_ERROR, 'Parse: geen message/delivery-status gevonden (uid ' . $uid . ', mailbox ' . $mailbox . ')');
                 @imap_close($imap);
