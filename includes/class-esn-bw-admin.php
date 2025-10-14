@@ -118,6 +118,69 @@ class ESN_BW_Admin {
             });
             </script>';
         }, ESN_BW_Core::SLUG_SETTINGS, 'esn_bw_section_local');
+
+        //Register everything needed for GF connection
+        register_setting('esn_bw_local_group', 'esn_bw_gf_settings', [
+        'type' => 'array',
+        'sanitize_callback' => function ($in) {
+            return [
+            'enabled'          => !empty($in['enabled']),
+            'form_id'          => isset($in['form_id']) ? (int)$in['form_id'] : 0,
+            'email_field_id'   => isset($in['email_field_id']) ? (int)$in['email_field_id'] : 0,
+            'status_field_id'  => isset($in['status_field_id']) ? (int)$in['status_field_id'] : 0,
+            'window_minutes'   => isset($in['window_minutes']) ? max(1,(int)$in['window_minutes']) : 120,
+            'status_verified'  => isset($in['status_verified']) ? trim($in['status_verified']) : 'Verified',
+            'status_bounce'    => isset($in['status_bounce']) ? trim($in['status_bounce']) : 'Bounce',
+            ];
+        },
+        'default' => [
+            'enabled'          => false,
+            'form_id'          => 0,
+            'email_field_id'   => 0,
+            'status_field_id'  => 0,
+            'window_minutes'   => 120,
+            'status_verified'  => 'Verified',
+            'status_bounce'    => 'Bounce',
+        ],
+        ]);
+
+        add_settings_section('esn_bw_section_gf', 'Gravity Forms integratie', function () {
+        echo '<p>Match bounces met GF-entries op e-mailadres en tijdvenster; zet Status-veld op <em>Bounce</em> tenzij al <em>Verified</em>.</p>';
+        }, self::SLUG_SETTINGS);
+
+        add_settings_field('esn_bw_gf_enabled', 'Ins schakelen', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        echo '<label><input type="checkbox" name="esn_bw_gf_settings[enabled]" value="1" '.(!empty($s['enabled'])?'checked':'').'> Activeren</label>';
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_form', 'Form ID', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[form_id]" value="%d">', (int)($s['form_id']??0));
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_email', 'Email Field ID', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[email_field_id]" value="%d">', (int)($s['email_field_id']??0));
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_status', 'Status Field ID', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[status_field_id]" value="%d">', (int)($s['status_field_id']??0));
+        echo '<p class="description">Het GF-veld waarin de tekst “Bounce”/“Verified” komt te staan.</p>';
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_window', 'Match venster (min.)', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        printf('<input type="number" class="small-text" name="esn_bw_gf_settings[window_minutes]" value="%d">', (int)($s['window_minutes']??120));
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
+
+        add_settings_field('esn_bw_gf_values', 'Status waarden', function () {
+        $s = get_option('esn_bw_gf_settings', []);
+        $v  = esc_attr($s['status_verified'] ?? 'Verified');
+        $b  = esc_attr($s['status_bounce'] ?? 'Bounce');
+        echo 'Verified: <input type="text" name="esn_bw_gf_settings[status_verified]" value="'.$v.'" class="regular-text" style="max-width:160px;"> ';
+        echo 'Bounce: <input type="text" name="esn_bw_gf_settings[status_bounce]" value="'.$b.'" class="regular-text" style="max-width:160px;">';
+        }, self::SLUG_SETTINGS, 'esn_bw_section_gf');
     }
 
     public static function maybe_show_dependency_notice() {

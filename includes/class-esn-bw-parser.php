@@ -92,6 +92,17 @@ class ESN_BW_Parser {
             } else {
                 $arrival = null;
             }
+            
+            // Gravity Forms matchen (optioneel, als ingeschakeld)
+            $gf = get_option('esn_bw_gf_settings', []);
+            if (!empty($gf['enabled'])) {
+                ESN_BW_GF::maybe_mark_bounce(
+                    $final,           // ontvanger uit DSN
+                    $arrival,         // arrival in WP-tijdzone (jij zet 'm al zo)
+                    $gf,
+                    [ 'uid' => (int)$uid, 'recipient' => $final ]
+                );
+            }
 
             //Log
             esn_bw_dbg('mapped fields', [
@@ -128,7 +139,7 @@ class ESN_BW_Parser {
             esn_bw_dbg('parse_job: done', ['uid' => $uid, 'mailbox' => $mailbox]);
             
             @imap_close($imap);
-            
+
         } catch (\Throwable $e) {
             esn_bw_dbg('exception', [
             'msg'  => $e->getMessage(),
