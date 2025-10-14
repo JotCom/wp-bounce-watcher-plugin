@@ -638,4 +638,21 @@ JS
 
         ESN_BW_Bounces_List_Table::render_page();
     }
+    // [DBG] veilige logger
+    private static function dbg(string $msg, array $ctx = []): void {
+        if (!defined('WP_DEBUG') || !WP_DEBUG) return;
+        // mask mogelijk gevoelige velden
+        foreach (['password','pass','secret','Authorization'] as $k) {
+            if (isset($ctx[$k]) && is_string($ctx[$k]) && $ctx[$k] !== '') {
+                $ctx[$k] = '[redacted]';
+            }
+        }
+        // beperk hele grote waarden
+        foreach ($ctx as $k => $v) {
+            if (is_string($v) && strlen($v) > 500) {
+                $ctx[$k] = substr($v, 0, 500) . '…(truncated)';
+            }
+        }
+        error_log('[ESN_BW] ' . $msg . ' ' . json_encode($ctx));
+    }
 }
